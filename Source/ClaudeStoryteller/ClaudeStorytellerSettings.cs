@@ -11,19 +11,34 @@ namespace ClaudeStoryteller
         private string cachedDecryptedKey = null;
         public bool enabled = true;
 
-        public float minorMinHours = 36f;
-        public float minorMaxHours = 72f;
-        public float majorMinDays = 3f;
-        public float majorMaxDays = 7f;
-        public float narrativeMinDays = 4f;
-        public float narrativeMaxDays = 8f;
+        // Surface Claude's arc names, reasoning and per-event notes as in-game letters.
+        public bool showNarrativeLetters = true;
 
-        public static readonly float MINOR_FLOOR_HOURS = 6f;
-        public static readonly float MINOR_CEILING_HOURS = 72f;
-        public static readonly float MAJOR_FLOOR_DAYS = 1f;
-        public static readonly float MAJOR_CEILING_DAYS = 14f;
-        public static readonly float NARRATIVE_FLOOR_DAYS = 2f;
-        public static readonly float NARRATIVE_CEILING_DAYS = 15f;
+        // Bounds on how often the unified call runs. Claude picks next_call_days per
+        // response; these clamp its choice, so a narrow range overrides its pacing.
+        public float callMinDays = 2f;
+        public float callMaxDays = 7f;
+
+        public static readonly float CALL_FLOOR_DAYS = 1f;
+        public static readonly float CALL_CEILING_DAYS = 15f;
+
+        // Force-end an arc that runs too long or stalls with nothing queued.
+        public float maxArcDays = 24f;
+        public float arcStallDays = 10f;
+
+        public static readonly float MAX_ARC_DAYS_FLOOR = 8f;
+        public static readonly float MAX_ARC_DAYS_CEILING = 40f;
+        public static readonly float ARC_STALL_DAYS_FLOOR = 4f;
+        public static readonly float ARC_STALL_DAYS_CEILING = 20f;
+
+        // Phase 2: how many scattered ("meanwhile") events are kept per call while an arc is
+        // active; extras are trimmed (SCATTERED_TRIMMED).
+        public float maxScatteredDuringArc = 3f;
+        public static readonly float MAX_SCATTERED_DURING_ARC_FLOOR = 0f;
+        public static readonly float MAX_SCATTERED_DURING_ARC_CEILING = 6f;
+
+        // Gated behind this flag, no behavior change yet (Phase 3 wires the request body).
+        public bool useStructuredOutputs = false;
 
         private static readonly byte[] ObfuscationKey = { 0x43, 0x6C, 0x61, 0x75, 0x64, 0x65, 0x41, 0x49 };
 
@@ -85,13 +100,14 @@ namespace ClaudeStoryteller
         {
             Scribe_Values.Look(ref encryptedApiKey, "apiKey", "");
             Scribe_Values.Look(ref enabled, "enabled", true);
-            Scribe_Values.Look(ref minorMinHours, "minorMinHours", 36f);
-            Scribe_Values.Look(ref minorMaxHours, "minorMaxHours", 72f);
-            Scribe_Values.Look(ref majorMinDays, "majorMinDays", 3f);
-            Scribe_Values.Look(ref majorMaxDays, "majorMaxDays", 7f);
-            Scribe_Values.Look(ref narrativeMinDays, "narrativeMinDays", 4f);
-            Scribe_Values.Look(ref narrativeMaxDays, "narrativeMaxDays", 8f);
-            
+            Scribe_Values.Look(ref showNarrativeLetters, "showNarrativeLetters", true);
+            Scribe_Values.Look(ref callMinDays, "callMinDays", 2f);
+            Scribe_Values.Look(ref callMaxDays, "callMaxDays", 7f);
+            Scribe_Values.Look(ref maxArcDays, "maxArcDays", 24f);
+            Scribe_Values.Look(ref arcStallDays, "arcStallDays", 10f);
+            Scribe_Values.Look(ref maxScatteredDuringArc, "maxScatteredDuringArc", 3f);
+            Scribe_Values.Look(ref useStructuredOutputs, "useStructuredOutputs", false);
+
             if (Scribe.mode == LoadSaveMode.LoadingVars)
             {
                 cachedDecryptedKey = null;
@@ -100,52 +116,12 @@ namespace ClaudeStoryteller
             base.ExposeData();
         }
 
-        public float GetMinorInterval()
-        {
-            return Rand.Range(minorMinHours, minorMaxHours);
-        }
+        public float CallMinDays => Mathf.Clamp(callMinDays, CALL_FLOOR_DAYS, CALL_CEILING_DAYS);
 
-        public float GetMajorInterval()
-        {
-            return Rand.Range(majorMinDays, majorMaxDays) * 24f;
-        }
+        public float CallMaxDays => Mathf.Max(CallMinDays, Mathf.Clamp(callMaxDays, CALL_FLOOR_DAYS, CALL_CEILING_DAYS));
 
-        public float GetNarrativeInterval()
-        {
-            return Rand.Range(narrativeMinDays, narrativeMaxDays) * 24f;
-        }
+        public float ClampCallDays(float days) => Mathf.Clamp(days, CallMinDays, CallMaxDays);
 
-        public void ApplyTimerAdjustment(Models.TimerAdjustment adj)
-        {
-            if (adj == null) return;
-
-            if (adj.MinorMinHours > 0 && adj.MinorMaxHours > 0)
-            {
-                minorMinHours = Mathf.Clamp(adj.MinorMinHours, MINOR_FLOOR_HOURS, MINOR_CEILING_HOURS);
-                minorMaxHours = Mathf.Clamp(adj.MinorMaxHours, MINOR_FLOOR_HOURS, MINOR_CEILING_HOURS);
-                if (minorMinHours > minorMaxHours) minorMaxHours = minorMinHours;
-            }
-
-            if (adj.MajorMinDays > 0 && adj.MajorMaxDays > 0)
-            {
-                majorMinDays = Mathf.Clamp(adj.MajorMinDays, MAJOR_FLOOR_DAYS, MAJOR_CEILING_DAYS);
-                majorMaxDays = Mathf.Clamp(adj.MajorMaxDays, MAJOR_FLOOR_DAYS, MAJOR_CEILING_DAYS);
-                if (majorMinDays > majorMaxDays) majorMaxDays = majorMinDays;
-            }
-
-            if (adj.NarrativeMinDays > 0 && adj.NarrativeMaxDays > 0)
-            {
-                narrativeMinDays = Mathf.Clamp(adj.NarrativeMinDays, NARRATIVE_FLOOR_DAYS, NARRATIVE_CEILING_DAYS);
-                narrativeMaxDays = Mathf.Clamp(adj.NarrativeMaxDays, NARRATIVE_FLOOR_DAYS, NARRATIVE_CEILING_DAYS);
-                if (narrativeMinDays > narrativeMaxDays) narrativeMaxDays = narrativeMinDays;
-            }
-
-            ClaudeLogger.LogEntry("TIMER_ADJUST",
-                $"Timers updated — Minor: {minorMinHours:F1}-{minorMaxHours:F1}h, " +
-                $"Major: {majorMinDays:F1}-{majorMaxDays:F1}d, " +
-                $"Narrative: {narrativeMinDays:F1}-{narrativeMaxDays:F1}d"
-            );
-        }
     }
 
     public class ClaudeStorytellerMod : Mod
@@ -233,30 +209,42 @@ namespace ClaudeStoryteller
 
             listing.Gap();
             listing.CheckboxLabeled("Enable Claude Storyteller", ref settings.enabled);
+            listing.CheckboxLabeled("Show narrative letters", ref settings.showNarrativeLetters);
+            listing.Label("  Sends Claude's arc names and event notes to your letter stack.");
 
             listing.Gap();
-            listing.Label("Minor Events (weather, animals, visitors)");
-            listing.Label($"  Interval: {settings.minorMinHours:F0} - {settings.minorMaxHours:F0} game hours");
-            settings.minorMinHours = listing.Slider(settings.minorMinHours, 6f, 72f);
-            settings.minorMaxHours = listing.Slider(settings.minorMaxHours, 6f, 72f);
-            if (settings.minorMinHours > settings.minorMaxHours)
-                settings.minorMaxHours = settings.minorMinHours;
+            listing.Label("Storyteller Call Interval");
+            listing.Label($"  Every {settings.CallMinDays:F1} - {settings.CallMaxDays:F1} game days");
+            settings.callMinDays = listing.Slider(settings.callMinDays,
+                ClaudeStorytellerSettings.CALL_FLOOR_DAYS, ClaudeStorytellerSettings.CALL_CEILING_DAYS);
+            settings.callMaxDays = listing.Slider(settings.callMaxDays,
+                ClaudeStorytellerSettings.CALL_FLOOR_DAYS, ClaudeStorytellerSettings.CALL_CEILING_DAYS);
+            if (settings.callMinDays > settings.callMaxDays)
+                settings.callMaxDays = settings.callMinDays;
+
+            listing.Label("  Claude decides when to next check on your colony; this clamps that");
+            listing.Label("  choice. Narrower and lower = more responsive storyteller, higher API");
+            listing.Label($"  cost (~$0.12 per call, so roughly ${0.12 * (30f / settings.CallMaxDays):F2} - ${0.12 * (30f / settings.CallMinDays):F2} per 30 game days).");
+            listing.Label("  A narrative arc's pace is bounded by this same interval — it cannot advance");
+            listing.Label("  faster than the storyteller calls back. 2-3 days is recommended while an arc is live.");
 
             listing.Gap();
-            listing.Label("Major Events (raids, infestations, mechs)");
-            listing.Label($"  Interval: {settings.majorMinDays:F1} - {settings.majorMaxDays:F1} game days");
-            settings.majorMinDays = listing.Slider(settings.majorMinDays, 1f, 14f);
-            settings.majorMaxDays = listing.Slider(settings.majorMaxDays, 1f, 14f);
-            if (settings.majorMinDays > settings.majorMaxDays)
-                settings.majorMaxDays = settings.majorMinDays;
+            listing.Label("Arc Timeouts");
+            listing.Label($"  Force-end an arc after {settings.maxArcDays:F0} days, or after {settings.arcStallDays:F0} days with no beat fired.");
+            settings.maxArcDays = listing.Slider(settings.maxArcDays,
+                ClaudeStorytellerSettings.MAX_ARC_DAYS_FLOOR, ClaudeStorytellerSettings.MAX_ARC_DAYS_CEILING);
+            settings.arcStallDays = listing.Slider(settings.arcStallDays,
+                ClaudeStorytellerSettings.ARC_STALL_DAYS_FLOOR, ClaudeStorytellerSettings.ARC_STALL_DAYS_CEILING);
 
             listing.Gap();
-            listing.Label("Narrative Arcs (multi-event story sequences)");
-            listing.Label($"  Interval: {settings.narrativeMinDays:F1} - {settings.narrativeMaxDays:F1} game days");
-            settings.narrativeMinDays = listing.Slider(settings.narrativeMinDays, 2f, 15f);
-            settings.narrativeMaxDays = listing.Slider(settings.narrativeMaxDays, 2f, 15f);
-            if (settings.narrativeMinDays > settings.narrativeMaxDays)
-                settings.narrativeMaxDays = settings.narrativeMinDays;
+            listing.Label($"  Max scattered (\"meanwhile\") events per call while an arc is active: {settings.maxScatteredDuringArc:F0}");
+            settings.maxScatteredDuringArc = listing.Slider(settings.maxScatteredDuringArc,
+                ClaudeStorytellerSettings.MAX_SCATTERED_DURING_ARC_FLOOR, ClaudeStorytellerSettings.MAX_SCATTERED_DURING_ARC_CEILING);
+
+            listing.Gap();
+            listing.CheckboxLabeled("Use structured outputs (experimental)", ref settings.useStructuredOutputs);
+            listing.Label("  Asks the API to guarantee the response's JSON shape instead of just asking nicely.");
+            listing.Label("  Falls back automatically to a normal request if the API rejects the schema.");
 
             listing.Gap();
             listing.Gap();

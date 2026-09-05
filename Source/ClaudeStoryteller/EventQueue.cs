@@ -6,7 +6,7 @@ using Verse;
 
 namespace ClaudeStoryteller
 {
-    public class QueuedEvent
+    public class QueuedEvent : IExposable
     {
         public string EventType { get; set; }
         public string Category { get; set; }
@@ -17,10 +17,54 @@ namespace ClaudeStoryteller
         public string SourceCycle { get; set; } // "minor", "major", "narrative"
         public string ArcName { get; set; }     // null unless part of a narrative arc
         public string Note { get; set; }
+        public string Flavor { get; set; }
+
+        // ---- Phase 2 ----
+        public string Link { get; set; }         // "and" | "but" | "therefore"
+        public string LinkReason { get; set; }   // debug log only
+        public string CircleStep { get; set; }   // "need" | "search" | "find" | "take" | "return" | "change"
+        public string Expect { get; set; }       // debug log only
+        public string FireWhen { get; set; }      // "scheduled" | "after_calm"
+        public string OnBadJson { get; set; }     // raw braced JSON of the optional on_bad block
 
         public QueuedEvent()
         {
             Intensity = 1.0f;
+        }
+
+        public void ExposeData()
+        {
+            string eventType = EventType, category = Category, subtype = Subtype;
+            string faction = Faction, sourceCycle = SourceCycle, arcName = ArcName;
+            string note = Note, flavor = Flavor;
+            string link = Link, linkReason = LinkReason, circleStep = CircleStep;
+            string expect = Expect, fireWhen = FireWhen, onBadJson = OnBadJson;
+            float intensity = Intensity;
+            int fireAtTick = FireAtTick;
+
+            Scribe_Values.Look(ref eventType, "eventType");
+            Scribe_Values.Look(ref category, "category");
+            Scribe_Values.Look(ref subtype, "subtype");
+            Scribe_Values.Look(ref faction, "faction");
+            Scribe_Values.Look(ref sourceCycle, "sourceCycle");
+            Scribe_Values.Look(ref arcName, "arcName");
+            Scribe_Values.Look(ref note, "note");
+            Scribe_Values.Look(ref flavor, "flavor");
+            Scribe_Values.Look(ref intensity, "intensity", 1.0f);
+            Scribe_Values.Look(ref fireAtTick, "fireAtTick", 0);
+            Scribe_Values.Look(ref link, "link");
+            Scribe_Values.Look(ref linkReason, "linkReason");
+            Scribe_Values.Look(ref circleStep, "circleStep");
+            Scribe_Values.Look(ref expect, "expect");
+            Scribe_Values.Look(ref fireWhen, "fireWhen");
+            Scribe_Values.Look(ref onBadJson, "onBadJson");
+
+            EventType = eventType; Category = category; Subtype = subtype;
+            Faction = faction; SourceCycle = sourceCycle; ArcName = arcName;
+            Note = note; Flavor = flavor;
+            Intensity = intensity; FireAtTick = fireAtTick;
+            Link = link; LinkReason = linkReason; CircleStep = circleStep;
+            Expect = expect; FireWhen = fireWhen; OnBadJson = onBadJson;
         }
     }
 
@@ -31,6 +75,12 @@ namespace ClaudeStoryteller
 
         // Conflict window: events of the same type within this many ticks get deduplicated
         private const int CONFLICT_WINDOW_TICKS = 4 * GenDate.TicksPerHour;
+
+        // fire_when "after_calm" hold bookkeeping. Keyed by object reference — QueuedEvent has
+        // no stable id, but the same instance stays in `queue` from Enqueue to Pop.
+        private static readonly Dictionary<QueuedEvent, int> heldSinceTick = new Dictionary<QueuedEvent, int>();
+        private static readonly HashSet<QueuedEvent> loggedHold = new HashSet<QueuedEvent>();
+        private const int MAX_HOLD_TICKS = 48 * GenDate.TicksPerHour;
 
         public static void Enqueue(QueuedEvent evt)
         {
@@ -78,15 +128,53 @@ namespace ClaudeStoryteller
             Enqueue(evt);
         }
 
-        public static List<QueuedEvent> PopReady(int currentTick)
+        /// <summary>
+        /// Pops events whose fire time has arrived. An event with FireWhen == "after_calm" is
+        /// held while threatActive() is true, up to MAX_HOLD_TICKS (48 game hours), after which
+        /// it fires anyway. threatActive() is evaluated lazily and at most once per call — no
+        /// point paying for GenHostility.AnyHostileActiveThreatToPlayer if nothing is due.
+        /// </summary>
+        public static List<QueuedEvent> PopReady(int currentTick, Func<bool> threatActive)
         {
             lock (lockObj)
             {
-                var ready = queue.Where(e => e.FireAtTick <= currentTick).ToList();
+                var due = queue.Where(e => e.FireAtTick <= currentTick).ToList();
+                if (due.Count == 0) return due;
+
+                bool? threatIsActive = null;
+                var ready = new List<QueuedEvent>();
+
+                foreach (var evt in due)
+                {
+                    if (evt.FireWhen == "after_calm")
+                    {
+                        if (threatIsActive == null) threatIsActive = threatActive != null && threatActive();
+
+                        if (threatIsActive == true)
+                        {
+                            if (!heldSinceTick.ContainsKey(evt)) heldSinceTick[evt] = currentTick;
+                            int heldTicks = currentTick - heldSinceTick[evt];
+                            if (heldTicks < MAX_HOLD_TICKS)
+                            {
+                                if (loggedHold.Add(evt))
+                                    ClaudeLogger.LogEntry("ARC_HOLD",
+                                        $"Holding {evt.EventType} (fire_when after_calm) while a threat is active.");
+                                continue;
+                            }
+                            // Held past the max — release anyway rather than hold forever.
+                        }
+                    }
+                    ready.Add(evt);
+                }
+
                 foreach (var evt in ready)
                 {
                     queue.Remove(evt);
+                    if (heldSinceTick.Remove(evt))
+                        ClaudeLogger.LogEntry("ARC_RELEASED", $"Released {evt.EventType} from after_calm hold.");
+                    loggedHold.Remove(evt);
                 }
+
                 return ready;
             }
         }
@@ -104,11 +192,29 @@ namespace ClaudeStoryteller
             get { lock (lockObj) { return queue.Count; } }
         }
 
+        // Replaces the queue wholesale - used when restoring a save.
+        public static void RestoreAll(List<QueuedEvent> restored)
+        {
+            lock (lockObj)
+            {
+                queue.Clear();
+                heldSinceTick.Clear();
+                loggedHold.Clear();
+                if (restored != null)
+                {
+                    queue.AddRange(restored.Where(e => e != null && !string.IsNullOrEmpty(e.EventType)));
+                    queue.Sort((a, b) => a.FireAtTick.CompareTo(b.FireAtTick));
+                }
+            }
+        }
+
         public static void Clear()
         {
             lock (lockObj)
             {
                 queue.Clear();
+                heldSinceTick.Clear();
+                loggedHold.Clear();
             }
         }
 
@@ -117,6 +223,37 @@ namespace ClaudeStoryteller
             lock (lockObj)
             {
                 queue.RemoveAll(e => e.SourceCycle == sourceCycle);
+            }
+        }
+
+        /// <summary>Removes every still-queued narrative beat belonging to the named arc — used
+        /// by FinalizeArc (so a finished arc's leftover beats never fire under a later arc) and
+        /// by "queued_beats_action": "replace" (so new beats are not appended to stale ones).</summary>
+        public static void ClearNarrativeFor(string arcName)
+        {
+            if (string.IsNullOrEmpty(arcName)) return;
+            lock (lockObj)
+            {
+                queue.RemoveAll(e => e.SourceCycle == "narrative" && e.ArcName == arcName);
+            }
+        }
+
+        public static int CountNarrativeFor(string arcName)
+        {
+            if (string.IsNullOrEmpty(arcName)) return 0;
+            lock (lockObj)
+            {
+                return queue.Count(q => q.SourceCycle == "narrative" && q.ArcName == arcName);
+            }
+        }
+
+        public static List<QueuedEvent> PeekNarrativeFor(string arcName)
+        {
+            if (string.IsNullOrEmpty(arcName)) return new List<QueuedEvent>();
+            lock (lockObj)
+            {
+                return queue.Where(q => q.SourceCycle == "narrative" && q.ArcName == arcName)
+                    .OrderBy(q => q.FireAtTick).ToList();
             }
         }
 

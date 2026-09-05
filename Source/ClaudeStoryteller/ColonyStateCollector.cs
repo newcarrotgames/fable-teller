@@ -12,26 +12,54 @@ namespace ClaudeStoryteller
         // Event categories for Claude to understand what's available
         private static readonly HashSet<string> WeatherEvents = new HashSet<string>
         {
-            "ColdSnap", "HeatWave", "ToxicFallout", "VolcanicWinter", "Flashstorm", "Eclipse", "SolarFlare", "Aurora"
+            "ColdSnap", "HeatWave", "ToxicFallout", "VolcanicWinter", "Flashstorm", "Eclipse", "SolarFlare", "Aurora",
+            // Biotech
+            "NoxiousHaze",
+            // Odyssey
+            "VolcanicAsh", "Drought", "SeasonalFlooding", "BioluminescentSpores", "OrbitalDebris"
         };
 
         private static readonly HashSet<string> ThreatEventSet = new HashSet<string>
         {
             "RaidEnemy", "Infestation", "MechCluster", "ManhunterPack", "DefoliatorShipPartCrash",
-            "PsychicEmanatorShipPartCrash", "PsychicDrone"
+            "PsychicEmanatorShipPartCrash", "PsychicDrone",
+            // Core
+            "Ambush", "ManhunterAmbush", "AnimalInsanityMass", "AnimalInsanitySingle",
+            "DeepDrillInfestation", "CaravanDemand", "RansomDemand",
+            // Royalty
+            "ProblemCauser",
+            // Anomaly
+            "ChimeraAssault", "DevourerAssault", "GorehulkAssault", "FleshbeastAttack",
+            "ShamblerSwarm", "SmallShamblerSwarm", "ShamblerAssault", "GhoulAttack",
+            "SightstealerSwarm", "SightstealerArrival", "FrenziedAnimals",
+            "BloodRain", "DeathPall", "UnnaturalDarkness"
         };
 
         private static readonly HashSet<string> PositiveEvents = new HashSet<string>
         {
             "TraderCaravanArrival", "OrbitalTraderArrival", "WandererJoin", "ResourcePodCrash",
             "RefugeePodCrash", "TravelerGroup", "VisitorGroup", "SelfTame", "FarmAnimalsWanderIn",
-            "ThrumboPasses", "WildManWandersIn", "ShipChunkDrop", "GiveQuest"
+            "ThrumboPasses", "WildManWandersIn", "ShipChunkDrop",
+            // Core
+            "CaravanMeeting", "PsychicSoothe", "GiveQuest_Random",
+            // Royalty
+            "CaravanArrivalTributeCollector",
+            // Ideology
+            "GiveQuest_Beggars", "GiveQuest_ReliquaryPilgrims", "GiveQuest_WorkSite",
+            // Anomaly
+            "GoldenCubeArrival", "CreepJoinerJoin"
         };
 
         private static readonly HashSet<string> DiseaseEvents = new HashSet<string>
         {
             "Disease_Plague", "Disease_Flu", "Disease_Malaria", "Disease_GutWorms",
-            "Disease_FibrousMechanites", "Disease_SensoryMechanites", "Disease_MuscleParasites"
+            "Disease_FibrousMechanites", "Disease_SensoryMechanites", "Disease_MuscleParasites",
+            // Core
+            "Disease_SleepingSickness", "Disease_OrganDecay", "Disease_AnimalFlu", "Disease_AnimalPlague",
+            // Royalty
+            "Disease_Abasia", "Disease_BloodRot",
+            // Odyssey
+            "GillRot"
         };
 
         // All known events for underused detection
@@ -48,31 +76,31 @@ namespace ClaudeStoryteller
             AllKnownEvents.Add("CropBlight");
             AllKnownEvents.Add("ShortCircuit");
             AllKnownEvents.Add("Alphabeavers");
-            AllKnownEvents.Add("AnimalInsanityMass");
+            AllKnownEvents.Add("MeteoriteImpact");
         }
 
         // ========== Delegate to GameComponent ==========
 
-        public static void RecordEvent(string type, string outcome)
+        public static void RecordEvent(string type, string outcome, string requestedType, string source)
         {
             var comp = StorytellerGameComponent.Get();
-            comp?.RecordEvent(type, outcome);
+            comp?.RecordEvent(type, outcome, requestedType, source);
 
             // Track disease separately for hard cooldown
             if (DiseaseEvents.Contains(type))
                 comp?.RecordDiseaseFired();
         }
 
-        public static void RecordColonistDeath()
+        public static void RecordColonistDeath(string name)
         {
             var comp = StorytellerGameComponent.Get();
-            comp?.RecordColonistDeath();
+            comp?.RecordColonistDeath(name);
         }
 
-        public static void RecordColonistDowned()
+        public static void RecordColonistDowned(string name)
         {
             var comp = StorytellerGameComponent.Get();
-            comp?.RecordColonistDowned();
+            comp?.RecordColonistDowned(name);
         }
 
         public static bool IsWeatherEvent(string eventType)
@@ -407,7 +435,7 @@ namespace ClaudeStoryteller
                     DaysSinceLastDisease = 999,
                     DaysSinceArcCompleted = 999,
                     ActiveArc = null,
-                    ActiveArcEventsRemaining = 0
+                    QueuedArcBeats = 0
                 };
             }
 
@@ -446,7 +474,7 @@ namespace ClaudeStoryteller
                 DaysSinceLastDisease = comp.DaysSinceLastDisease,
                 DaysSinceArcCompleted = comp.DaysSinceArcCompleted,
                 ActiveArc = comp.ActiveArcName,
-                ActiveArcEventsRemaining = comp.ActiveArcEventsRemaining
+                QueuedArcBeats = comp.QueuedArcBeats
             };
         }
 
@@ -470,8 +498,8 @@ namespace ClaudeStoryteller
                 Colony = CollectColonyInfo(map, colonists, wealth, days),
                 CombatReadiness = CollectCombatReadiness(map, colonists),
                 Resources = CollectResources(map, colonists),
-                RecentHistory = CollectRecentHistory(comp),
-                Cooldowns = CollectCooldowns(),
+                RecentHistory = CollectRecentHistory(comp, map),
+                Cooldowns = null,
                 AvailableFactions = CollectFactions(),
                 DoNotRepeat = comp?.GetRecentEventTypes(3) ?? new List<string>(),
                 CurrentQueue = CollectQueueContext(),
@@ -483,13 +511,27 @@ namespace ClaudeStoryteller
                 ExcludedThisCall = GenerateExclusionList(availableEvents),
                 StorytellingMood = GenerateStorytellingMood(),
                 CategoryUsageLast5 = CollectCategoryUsage(comp, 5),
-                RandomSeed = Rand.Int
+                RandomSeed = Rand.Int,
+                UninvitedIncidents = PawnEventPatch.GetUninvitedIncidents(),
+                ArcProgress = comp?.BuildArcProgress(map),
+                RecurringFactions = comp?.GetRecurringFactions() ?? new List<string>(),
+                ColonistNames = colonists.OrderBy(p => p.thingIDNumber)
+                    .Select(p => p.Name?.ToStringShort ?? p.LabelShortCap).ToList(),
+                CastChangesSinceLastCall = comp?.GetCastChangesSinceLastCall()
             };
+
+            // One call = one increment, so calls_since_beat_authored actually counts calls.
+            if (comp != null && !string.IsNullOrEmpty(comp.ActiveArcName))
+                comp.IncrementCallsSinceBeatAuthored();
 
             // Always include arc history for unified calls
             var allAvailable = GetAvailableEvents(map);
             var arcLog = comp?.GetArcLog() ?? new List<ArcLogEntry>();
             state.ArcHistory = ArcSummarizer.Summarize(arcLog, allAvailable);
+
+            // Send-once semantics: clear after building the state we're about to send.
+            PawnEventPatch.ClearUninvitedIncidents();
+            comp?.ClearCastChangesSinceLastCall();
 
             return state;
         }
@@ -632,21 +674,28 @@ namespace ClaudeStoryteller
             return "stable";
         }
 
-        private static RecentHistory CollectRecentHistory(StorytellerGameComponent comp)
+        private static RecentHistory CollectRecentHistory(StorytellerGameComponent comp, Map map)
         {
             int lastThreatTick = comp?.LastThreatTick ?? -999999;
             int lastDeathTick = comp?.LastDeathTick ?? -999999;
             int lastDownedTick = comp?.LastDownedTick ?? -999999;
 
-            int daysSinceThreat = (Find.TickManager.TicksGame - lastThreatTick) / GenDate.TicksPerDay;
-            int daysSinceDeath = (Find.TickManager.TicksGame - lastDeathTick) / GenDate.TicksPerDay;
-            int daysSinceDowned = (Find.TickManager.TicksGame - lastDownedTick) / GenDate.TicksPerDay;
+            int daysSinceThreat = lastThreatTick < 0
+                ? 999 : (Find.TickManager.TicksGame - lastThreatTick) / GenDate.TicksPerDay;
+            int daysSinceDeath = lastDeathTick < 0
+                ? 999 : (Find.TickManager.TicksGame - lastDeathTick) / GenDate.TicksPerDay;
+            int daysSinceDowned = lastDownedTick < 0
+                ? 999 : (Find.TickManager.TicksGame - lastDownedTick) / GenDate.TicksPerDay;
 
             return new RecentHistory
             {
                 DaysSinceThreat = Math.Max(0, daysSinceThreat),
                 DaysSinceColonistDeath = Math.Max(0, daysSinceDeath),
                 DaysSinceColonistDowned = Math.Max(0, daysSinceDowned),
+                ThreatActiveNow = map != null && GenHostility.AnyHostileActiveThreatToPlayer(map),
+                ColonistDeathsTotal = comp?.ColonistDeathsTotal ?? 0,
+                ColonistDownedTotal = comp?.ColonistDownedTotal ?? 0,
+                LastColonistDeathName = comp?.LastDeathName,
                 LastEvents = comp?.GetRecentEvents(5) ?? new List<PastEvent>()
             };
         }
@@ -706,14 +755,8 @@ namespace ClaudeStoryteller
 
         private static Resources CollectResources(Map map, List<Pawn> colonists)
         {
-            float totalNutrition = map.resourceCounter.GetCountIn(ThingRequestGroup.FoodSourceNotPlantOrTree) * 0.05f;
-            float dailyNeed = colonists.Count * 1.6f;
-            int foodDays = dailyNeed > 0 ? (int)(totalNutrition / dailyNeed) : 999;
-
-            int medCount = map.resourceCounter.GetCount(ThingDefOf.MedicineIndustrial) +
-                          map.resourceCounter.GetCount(ThingDefOf.MedicineHerbal) +
-                          map.resourceCounter.GetCount(ThingDefOf.MedicineUltratech) * 2;
-            string medicine = medCount < 5 ? "none" : medCount < 15 ? "low" : medCount < 40 ? "adequate" : "abundant";
+            int foodDays = CurrentFoodDays(map, colonists.Count);
+            string medicine = MedicineTier(map);
 
             int compCount = map.resourceCounter.GetCount(ThingDefOf.ComponentIndustrial);
             string components = compCount < 5 ? "none" : compCount < 15 ? "low" : compCount < 40 ? "adequate" : "abundant";
@@ -729,17 +772,30 @@ namespace ClaudeStoryteller
             };
         }
 
-        private static Dictionary<string, int> CollectCooldowns()
+        /// <summary>Food days remaining for the current colonist count. Public so StartArc can capture a baseline.</summary>
+        public static int CurrentFoodDays(Map map)
         {
-            var cooldowns = new Dictionary<string, int>();
-            cooldowns["RaidEnemy"] = 0;
-            cooldowns["Infestation"] = 0;
-            cooldowns["MechCluster"] = 0;
-            cooldowns["ManhunterPack"] = 0;
-            cooldowns["ToxicFallout"] = 0;
-            cooldowns["ColdSnap"] = 0;
-            cooldowns["HeatWave"] = 0;
-            return cooldowns;
+            if (map == null) return 999;
+            int colonistCount = map.mapPawns?.FreeColonists?.Count() ?? 0;
+            return CurrentFoodDays(map, colonistCount);
+        }
+
+        private static int CurrentFoodDays(Map map, int colonistCount)
+        {
+            if (map == null) return 999;
+            float totalNutrition = map.resourceCounter.TotalHumanEdibleNutrition;
+            float dailyNeed = colonistCount * 1.6f;
+            return dailyNeed > 0 ? (int)(totalNutrition / dailyNeed) : 999;
+        }
+
+        /// <summary>Medicine tier label ("none"/"low"/"adequate"/"abundant"). Public so StartArc can capture a baseline.</summary>
+        public static string MedicineTier(Map map)
+        {
+            if (map == null) return "none";
+            int medCount = map.resourceCounter.GetCount(ThingDefOf.MedicineIndustrial) +
+                          map.resourceCounter.GetCount(ThingDefOf.MedicineHerbal) +
+                          map.resourceCounter.GetCount(ThingDefOf.MedicineUltratech) * 2;
+            return medCount < 5 ? "none" : medCount < 15 ? "low" : medCount < 40 ? "adequate" : "abundant";
         }
 
         private static List<string> CollectFactions()

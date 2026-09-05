@@ -23,6 +23,14 @@ namespace ClaudeStoryteller.Models
         public string StorytellingMood { get; set; }
         public Dictionary<string, int> CategoryUsageLast5 { get; set; }
         public int RandomSeed { get; set; }
+        public List<string> UninvitedIncidents { get; set; }
+        public ArcProgress ArcProgress { get; set; }         // null when no arc is active
+        public List<string> RecurringFactions { get; set; }  // from the faction ledger
+
+        // Phase 3: names, so letters can be about someone. Deterministic order (by thingID).
+        public List<string> ColonistNames { get; set; }
+        // "joined: X; died: Y; downed: Z" since the previous unified call, or null when nothing changed.
+        public string CastChangesSinceLastCall { get; set; }
     }
     public class ColonyInfo
     {
@@ -56,6 +64,10 @@ namespace ClaudeStoryteller.Models
         public int DaysSinceThreat { get; set; }
         public int DaysSinceColonistDeath { get; set; }
         public int DaysSinceColonistDowned { get; set; }
+        public bool ThreatActiveNow { get; set; }
+        public int ColonistDeathsTotal { get; set; }
+        public int ColonistDownedTotal { get; set; }
+        public string LastColonistDeathName { get; set; }
         public List<PastEvent> LastEvents { get; set; }
     }
     public class PastEvent
@@ -63,6 +75,8 @@ namespace ClaudeStoryteller.Models
         public string Type { get; set; }
         public int DaysAgo { get; set; }
         public string Outcome { get; set; }
+        public string RequestedType { get; set; }
+        public string Source { get; set; }
     }
     public class QueueContext
     {
@@ -86,6 +100,13 @@ namespace ClaudeStoryteller.Models
         public List<string> Events { get; set; }
         public string Outcome { get; set; }
         public int Day { get; set; }
+        public string Question { get; set; }
+        public string Summary { get; set; }
+        public int Deaths { get; set; }
+        public int ColonistDelta { get; set; }
+        public List<string> Links { get; set; }
+        public string Faction { get; set; }
+        public List<string> UnresolvedThreads { get; set; }
     }
     public class DifficultyInfo
     {
@@ -95,5 +116,74 @@ namespace ClaudeStoryteller.Models
         public float MinIntensity { get; set; }
         public bool AllowThreats { get; set; }
         public bool AllowMajorThreats { get; set; }
+    }
+
+    // ========== Arc progress (Phase 2, request-side only, never Scribe'd) ==========
+
+    public class ArcBaseline
+    {
+        public int Colonists { get; set; }
+        public float Wealth { get; set; }
+        public int FoodDays { get; set; }
+        public string Medicine { get; set; }
+    }
+
+    public class ArcDeltas
+    {
+        public int Days { get; set; }
+        public int Colonists { get; set; }
+        public float Wealth { get; set; }
+        public int FoodDays { get; set; }
+        public int Deaths { get; set; }
+        public int Downed { get; set; }
+        public string MedicineNow { get; set; }
+    }
+
+    public class ArcBeatChanges
+    {
+        public int Colonists { get; set; }
+        public float Wealth { get; set; }
+        public int FoodDays { get; set; }
+        public int Deaths { get; set; }
+        public int Downed { get; set; }
+    }
+
+    public class ArcBeatSummary
+    {
+        public string Type { get; set; }
+        public string RequestedType { get; set; }
+        public string Outcome { get; set; }
+        public string CircleStep { get; set; }
+        public string Link { get; set; }
+        public int Day { get; set; }
+        public ArcBeatChanges ChangesAfter { get; set; }
+    }
+
+    public class QueuedBeatSummary
+    {
+        public string Type { get; set; }
+        public string CircleStep { get; set; }
+        public string Link { get; set; }
+        public float FiresInHours { get; set; }
+        public string FireWhen { get; set; }
+    }
+
+    public class ArcProgress
+    {
+        public string Name { get; set; }
+        public string StoryQuestion { get; set; }
+        public string ArcFaction { get; set; }
+        public int DayStarted { get; set; }
+        public int DaysActive { get; set; }
+        public string SummarySoFar { get; set; }
+        public string LastExpectation { get; set; }
+        public ArcBaseline Baseline { get; set; }
+        public ArcDeltas NowVsBaseline { get; set; }
+        public List<ArcBeatSummary> BeatsFired { get; set; }
+        public ArcDeltas SinceLastBeat { get; set; }
+        public List<QueuedBeatSummary> QueuedBeats { get; set; }
+        public List<string> StepsUsed { get; set; }
+        public int CallsSinceBeatAuthored { get; set; }
+        public bool ClosingPending { get; set; }
     }
 }

@@ -13,7 +13,16 @@ namespace ClaudeStoryteller
         private static readonly HttpClient client = new HttpClient();
         private readonly string apiKey;
         private const string API_URL = "https://api.anthropic.com/v1/messages";
-        private const string MODEL = "claude-sonnet-4-20250514";
+        private const string MODEL = "claude-opus-5";
+
+        // Running totals for this session, reported in the USAGE log line.
+        private static int sessionCalls = 0;
+        private static long sessionInputTokens = 0;
+        private static long sessionOutputTokens = 0;
+
+        // claude-opus-5 list price, USD per million tokens.
+        private const double INPUT_COST_PER_MTOK = 5.0;
+        private const double OUTPUT_COST_PER_MTOK = 25.0;
 
         private static DateTime lastCallTime = DateTime.MinValue;
         private static readonly object rateLimitLock = new object();
@@ -120,19 +129,86 @@ Losing is Fun (threat_scale > 1.6): The player wants to be overwhelmed. They exp
 These are guidelines, not rules. Read the colony data and adjust. A struggling colony on Losing is Fun still needs a moment to breathe or the game just ends and that is not a good story either.
 
 ==============================
-NARRATIVE ARCS
+NARRATIVE ARCS: ONE BEAT AT A TIME
 ==============================
-Arcs are your signature feature. They are what make you different from vanilla storytellers.
+An arc is a short story told across several of your calls. You do not write it in one sitting. You write the
+next beat only after you have seen what the last one did. The snapshot is your only eyes on the colony.
 
-An arc is a sequence of events with narrative coherence — setup, escalation, climax, aftermath. They tell a mini-story within the colony's larger story.
+- ""start_arc"": no arc is active. Name it, pose its story_question, name arc_faction if the story is about a
+  faction, and queue its FIRST beat (circle_step ""need""). A second beat is allowed only with fire_when
+  ""after_calm"": it needs the first beat to be OVER, not to have gone any particular way. arc_flavor is the
+  opening letter.
+- ""continue"": an arc is active (arc_progress is present). Read arc_progress before anything else. Then either
+  queue the next beat as a ""therefore"" or ""but"" of a fact in arc_progress, or queue nothing and say in
+  reasoning what you are waiting to observe. Never more than 2 arc beats per call. Queued beats stay unless
+  queued_beats_action is ""replace"".
+- ""end_arc"": the story_question has been answered, or can no longer be answered. Write closing_flavor. You may
+  add ONE final beat with circle_step ""return"" or ""change""; the closing letter is delivered after it fires.
+- ""skip"": no arc is active and this is not the moment.
 
-Arc guidelines:
-- If an arc is active (active_arc is not null), set arc.decision to ""continue"". Do not start overlapping arcs.
-- Review arc_history to avoid repeating similar themes. Vary your arc structures.
-- Arc events should have intentional pacing — you decide the spacing based on what serves the story.
-- After an arc completes, consider a rest period proportional to how intense the arc was.
+Time your return: set next_call_days so you come back just after the beat resolves (about a day after a raid
+or manhunters, four to six after a disease, when a weather event ends). The code also pulls you back early
+when a colonist dies or a threat clears. The code ends an arc by itself after {max_arc_days} days, after
+{stall_days} days with no beat, or after three empty continues; you will see timed_out / stalled / abandoned
+in arc_history. Do not let it come to that. End arcs on purpose.
 
-Arc composition should reflect difficulty and colony state. A colony that just lost half its people does not need an aggressive arc. A thriving colony on hard difficulty does not need a gentle arc.
+==============================
+THE CONNECTOR RULE
+==============================
+Between any two consecutive beats you must be able to write ""therefore"" or ""but"". If the only honest word is
+""and then"", the beat does not belong in the arc: cut it or move it to scattered_events.
+
+THEREFORE: the beat follows from the observed outcome of the previous beat. They killed the manhunters and
+filled the freezer, THEREFORE the tribe that hunted those herds comes looking.
+BUT: the beat reverses the trajectory the previous outcome set. They lost a colonist to the raid, BUT a
+refugee pod from that same tribe comes down at the treeline.
+These are directions, not moods. Relief can be a THEREFORE (the cold killed the crops, therefore the herds
+migrate past the walls). Punishment can be a BUT (they armed up at the trader, but a solar flare kills the
+turrets).
+
+Rules:
+- The first beat of an arc may be ""and"". No later beat may be.
+- link_reason must point at the fact in arc_progress the beat depends on. If you cannot point at a fact,
+  queue nothing and come back sooner.
+- If arc_progress.last_expectation did not come true, the next beat is a BUT.
+- Alternate. Two of the same connector in a row is the limit.
+- A beat must ALSO stand alone as a good RimWorld incident. Causal but dull is still dull.
+- Never write the connector into the letter. The player must feel it, never read it.
+
+==============================
+THE SHAPE
+==============================
+The protagonist is the colony. Its story has a shape: comfortable (YOU), made to want something (NEED),
+commits (GO), is tested (SEARCH), gets what it wanted or something else (FIND), pays for it (TAKE), comes
+back (RETURN), is different (CHANGE). You SUPPLY some steps; the player performs the rest and you OBSERVE
+them in the snapshot.
+- need (supply): a disruption aimed at something in vulnerabilities or resources, so want and need coincide.
+- go (observe): a vulnerability disappears, a defence appears, silver or food_days move, colonist_count
+  changes. Never claim the colony chose something the snapshot does not show.
+- search (supply): the trial, chosen AFTER seeing the need beat's outcome; it forces the capability the need
+  exposed.
+- find (supply or observe): the payoff or the twist. The surprise belongs in the middle, not at the end.
+- take (supply): the price, sized to what the colony has NOW and tied to the find or the prosperity the arc
+  created. On Peaceful and Community Builder the price is never violence.
+- return (supply): pressure on the way out, then relief that is earned. Relief uses fire_when ""after_calm"".
+- change (observe and name): closing_flavor names what differs from arc_progress.baseline. A grave, a second
+  colonist, a wall that held, a larder. Never a lesson learned.
+Order matters more than completeness: three or four supplied beats per arc. Every arc must reach take and end
+on return or change. Never queue need twice. Never queue take before anything has been tested or found.
+
+==============================
+THE STORY QUESTION AND CONTINUITY
+==============================
+Every arc has one story_question, a single in-world question the arc exists to answer. It comes back to you
+in arc_progress every call. End the arc when it is answered: yes, no, or the question changed.
+You have no memory except the snapshot. Use arc_progress.beats_fired (what ACTUALLY fired, even when it was
+not what you asked for), since_last_beat and now_vs_baseline (real deaths and downed), last_expectation
+(compare before writing; a wrong prediction is a BUT waiting to be written), summary_so_far (rewrite it every
+call), arc_history (do not ask the same question twice, do not open two arcs the same way; recurring_factions
+tells you who has a grudge), uninvited_incidents (things that happened that you did not choose),
+cast_changes_since_last_call (who joined, died, or was downed since your previous call — check it before
+assuming a name from an earlier beat is still around), and recent_history.threat_active_now (hostiles on the
+map: do not judge the outcome yet, do not send relief).
 
 ==============================
 SCATTERED EVENTS
@@ -144,6 +220,10 @@ Scattered events are NOT part of the arc narrative. A trading caravan arriving m
 Place scattered events where they create interesting collisions with arc events, or where they fill quiet stretches between arc beats, or where they add flavor to peaceful periods. On harder difficulties, scattered threats can overlap with arc threats to create multi-front pressure. On easier difficulties, scattered events are mostly positive flavor.
 
 The number of scattered events should reflect how alive the world feels at this difficulty level and how long until your next call. There is no fixed count — send what the story needs.
+
+While an arc is active, scattered events are ""meanwhile"": at most {max_scattered_during_arc} per call, no
+scattered threat within a day of an arc beat, never an event that answers the story_question for it (list
+those in arc_reserved_types). The code trims what exceeds this.
 
 ==============================
 DISEASE RULES
@@ -162,7 +242,42 @@ You receive storytelling_mood — a creative theme to color your choices this ca
 You receive category_usage_last_5 — how many recent events came from each category. Spread across categories.
 
 RAID SUBTYPES (if RaidEnemy available): ""assault"", ""sapper"", ""siege"", ""drop_pods""
-FACTIONS: ""Pirate"", ""Tribal"", ""Mechanoid"" — use what is in available_factions. Rotate factions.
+FACTIONS: ""Pirate"", ""Tribal"", ""Mechanoid"" — use what is in available_factions. Rotate factions. An arc may pin a faction with arc.arc_faction (an exact name from available_factions); later beats can reuse it via faction: ""same_as_opening"".
+
+==============================
+PLAYER-FACING TEXT vs. YOUR REASONING
+==============================
+Two kinds of text come back from you, and they must never be confused.
+
+""reasoning"" and ""note"" are for the mod author's debug log. The player NEVER sees them.
+Write those however you like — mechanics, pacing theory, Cassandra/Phoebe/Randy talk, colonist counts, intensity numbers. That is the right place for it.
+
+""arc_flavor"" and ""flavor"" ARE SHOWN TO THE PLAYER as in-game letters, in the voice of the game world.
+Rules for those fields, without exception:
+- Write in-world. This is the colony's story as the colony experiences it.
+- NEVER mention: storytellers by name, arcs, pacing, structure, difficulty, intensity, tests, calibration, balance, colonist counts, ""the player"", event names, defNames, or anything about how the mod works.
+- No meta-commentary about your own choices. Do not explain WHY you chose something. Describe WHAT IS HAPPENING.
+- 1-3 sentences. Atmospheric, concrete, grounded in the colony's situation.
+- Ominous when something bad approaches. Warm when relief arrives. Never cute.
+
+BAD (never do this — this is reasoning leaking into player text):
+""First arc, so it sets tone: 'creeping dread' told through escalating signals. Structure is Cassandra-clean because a one-colonist colony has zero margin for chaos.""
+
+GOOD (this is what the player should read):
+""The animals have been restless for two days now, drifting toward the ridgeline and away from something. The air tastes like iron. Whatever is out there has not shown itself yet.""
+
+If you cannot write good in-world text for something, return an empty string rather than explaining yourself.
+
+Additional rules for arc text:
+- Point back at the previous beat with one concrete detail. Never use ""because"", ""as a result"",
+  ""therefore"", ""consequence"", or any word that explains.
+- Never assert what the colony felt, learned or decided. Never promise what an incident cannot deliver.
+- Use a colonist's name only via the tokens {dead} and {downed}, or if the name appears in colonist_names
+  and belongs to something that has already happened. Never name anyone in a beat that has not fired.
+- {faction} and {days} are also available tokens: {faction} fills in the arc's pinned faction name, and
+  {days} fills in how many days the current arc has been running. Use them instead of hand-writing a
+  faction name or a day count that could drift from what the code actually substitutes.
+- closing_flavor answers the story_question by naming what is different now. One to three sentences.
 
 ==============================
 RESPONSE FORMAT
@@ -170,19 +285,34 @@ RESPONSE FORMAT
 Respond ONLY with valid JSON:
 {
   ""arc"": {
-    ""decision"": ""start_arc"" or ""continue"" or ""skip"",
+    ""decision"": ""start_arc"" or ""continue"" or ""end_arc"" or ""skip"",
     ""arc_name"": ""<creative name>"",
+    ""arc_faction"": ""<exact name from available_factions, or null — start_arc only>"",
+    ""story_question"": ""<the in-world question this arc exists to answer — set on start_arc, omit or repeat on continue>"",
+    ""arc_reserved_types"": [""<defName>"", ""...""],
+    ""queued_beats_action"": ""keep"" or ""replace"",
+    ""arc_summary_so_far"": ""<DEBUG LOG ONLY: 2-3 sentences, rewritten every call, your own memory>"",
+    ""unresolved_threads"": [""<DEBUG LOG ONLY: 1-2 items to remember after this arc ends>""],
     ""events"": [
       {
         ""delay_hours"": <hours from now>,
-        ""type"": ""<exact defName from available_events>"",
+        ""type"": ""<exact defName from available_events>"" or ""none"" (letter-only beat, at most one per arc),
         ""subtype"": ""<or null>"",
-        ""faction"": ""<or null>"",
+        ""faction"": ""<exact name from available_factions>"" or ""same_as_opening"" or null,
         ""intensity"": <float — use your judgment>,
-        ""note"": ""<what this event means in the arc>""
+        ""circle_step"": ""need"" or ""search"" or ""find"" or ""take"" or ""return"" or ""change"",
+        ""link"": ""and"" or ""but"" or ""therefore"" (""and"" only on the arc's very first beat),
+        ""link_reason"": ""<DEBUG LOG ONLY: THEREFORE/BUT because <fact in arc_progress>>"",
+        ""expect"": ""<DEBUG LOG ONLY: what arc_progress should show next call>"",
+        ""fire_when"": ""scheduled"" or ""after_calm"",
+        ""note"": ""<DEBUG LOG ONLY: what this event means in the arc>"",
+        ""flavor"": ""<SHOWN TO PLAYER: 1-3 in-world sentences. No meta.>"",
+        ""on_bad"": { ""type"": ""<defName>"", ""subtype"": ""<or null>"", ""faction"": ""<or null>"", ""intensity"": <float>, ""flavor"": ""<SHOWN TO PLAYER>"" } or null
       }
     ],
-    ""reasoning"": ""<arc logic, how it differs from previous arcs>""
+    ""arc_reasoning"": ""<DEBUG LOG ONLY: arc logic, how it differs from previous arcs>"",
+    ""arc_flavor"": ""<SHOWN TO PLAYER: 1-3 in-world sentences setting the mood. No meta.>"",
+    ""closing_flavor"": ""<SHOWN TO PLAYER: end_arc only — names what is different now>""
   },
   ""scattered_events"": [
     {
@@ -191,16 +321,17 @@ Respond ONLY with valid JSON:
       ""subtype"": ""<or null>"",
       ""faction"": ""<or null>"",
       ""intensity"": <float>,
-      ""note"": ""<why this event at this time>""
+      ""note"": ""<DEBUG LOG ONLY: why this event at this time>"",
+      ""flavor"": ""<SHOWN TO PLAYER: 1-3 in-world sentences, or empty string. No meta.>""
     }
   ],
   ""posture"": {
     ""current_blend"": ""<your storytelling blend>"",
-    ""reasoning"": ""<what you observed in colony data that drove this choice>"",
+    ""posture_reasoning"": ""<what you observed in colony data that drove this choice>"",
     ""next_posture_hint"": ""<what might trigger a shift>""
   },
   ""next_call_days"": <you decide — when do you need to see the colony again?>,
-  ""reasoning"": ""<overall: what you observed, what you are testing, what you expect to happen>""
+  ""overall_reasoning"": ""<overall: what you observed, what you are testing, what you expect to happen>""
 }";
 
 
@@ -238,7 +369,8 @@ Respond ONLY with valid JSON:
                 string requestBody = SimpleJson.Serialize(new
                 {
                     model = MODEL,
-                    max_tokens = 50,
+                    max_tokens = 1000,
+                    output_config = new { effort = "low" },
                     messages = new[]
                     {
                         new { role = "user", content = "Reply with only: CONNECTION_OK" }
@@ -290,21 +422,37 @@ Respond ONLY with valid JSON:
                 string stateJson = SimpleJson.Serialize(state);
                 ClaudeLogger.LogStateRequest(stateJson);
 
-                string requestBody = SimpleJson.Serialize(new
-                {
-                    model = MODEL,
-                    max_tokens = 4000,
-                    temperature = 1.0,
-                    system = UNIFIED_SYSTEM_PROMPT,
-                    messages = new[]
-                    {
-                        new { role = "user", content = stateJson }
-                    }
-                });
+                // The prompt constant is a template; substitute settings-driven values per call
+                // rather than baking them in, so a mod-settings change takes effect immediately.
+                string systemPrompt = UNIFIED_SYSTEM_PROMPT
+                    .Replace("{max_arc_days}", ClaudeStorytellerMod.settings.maxArcDays.ToString("F0"))
+                    .Replace("{stall_days}", ClaudeStorytellerMod.settings.arcStallDays.ToString("F0"))
+                    .Replace("{max_scattered_during_arc}", ClaudeStorytellerMod.settings.maxScatteredDuringArc.ToString());
+
+                bool useStructured = ClaudeStorytellerMod.settings.useStructuredOutputs;
+                string requestBody = BuildUnifiedRequestBody(stateJson, systemPrompt, useStructured);
 
                 var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
                 var response = await requestClient.PostAsync(API_URL, content);
                 string responseJson = await response.Content.ReadAsStringAsync();
+
+                // Structured outputs are sent over raw HTTP with no SDK to sanitize the schema —
+                // any unsupported keyword 400s the whole call. Retry once without output_config
+                // rather than losing the call entirely; the hand-rolled parser below is the
+                // consumer either way, so a fallback response parses identically.
+                if (!response.IsSuccessStatusCode && useStructured
+                    && response.StatusCode == System.Net.HttpStatusCode.BadRequest
+                    && (responseJson.Contains("output_config") || responseJson.Contains("schema")))
+                {
+                    ClaudeLogger.LogEntry("API_SCHEMA_FALLBACK",
+                        $"Structured output request rejected (HTTP 400); retrying without format.\n{responseJson}");
+
+                    string retryBody = BuildUnifiedRequestBody(stateJson, systemPrompt, false);
+                    var retryContent = new StringContent(retryBody, Encoding.UTF8, "application/json");
+                    response = await requestClient.PostAsync(API_URL, retryContent);
+                    responseJson = await response.Content.ReadAsStringAsync();
+                }
+
                 ClaudeLogger.LogRawResponse(responseJson);
 
                 if (!response.IsSuccessStatusCode)
@@ -312,6 +460,8 @@ Respond ONLY with valid JSON:
                     ClaudeLogger.LogApiError($"HTTP {response.StatusCode}", responseJson);
                     return null;
                 }
+
+                LogUsage(responseJson, "unified");
 
                 string claudeText = ExtractTextContent(responseJson);
                 if (string.IsNullOrEmpty(claudeText))
@@ -328,6 +478,156 @@ Respond ONLY with valid JSON:
                 ClaudeLogger.LogApiError(ex.Message, ex.StackTrace);
                 return null;
             }
+        }
+
+        // ========== Structured outputs (Phase 3, gated behind settings.useStructuredOutputs) ==========
+
+        private static string BuildUnifiedRequestBody(string stateJson, string systemPrompt, bool useStructured)
+        {
+            var requestObj = new Dictionary<string, object>
+            {
+                { "model", MODEL },
+                { "max_tokens", 16000 },
+                { "system", systemPrompt },
+                { "messages", new object[]
+                    {
+                        new Dictionary<string, object> { { "role", "user" }, { "content", stateJson } }
+                    }
+                }
+            };
+
+            if (useStructured)
+            {
+                requestObj["output_config"] = new Dictionary<string, object>
+                {
+                    { "format", new Dictionary<string, object>
+                        {
+                            { "type", "json_schema" },
+                            { "schema", BuildResponseSchema() }
+                        }
+                    }
+                };
+            }
+
+            return SimpleJson.Serialize(requestObj);
+        }
+
+        // Schema built as nested Dictionary<string, object> — SimpleJson.Serialize emits
+        // dictionary keys verbatim (it only snake_cases reflected object property names), so
+        // this is the one place in the mod that can honestly use raw JSON Schema keywords like
+        // "anyOf" without a naming collision. Rules followed throughout: every object lists
+        // additionalProperties:false and ALL its properties in required; nullable fields are
+        // anyOf [string, null]; no minimum/maximum/minLength/maxLength (clamped in code instead).
+        // This must mirror RESPONSE FORMAT in UNIFIED_SYSTEM_PROMPT exactly, or the model will
+        // be constrained to a shape the hand-rolled parser was not written to expect.
+        private static Dictionary<string, object> SchemaString(bool nullable)
+        {
+            if (!nullable) return new Dictionary<string, object> { { "type", "string" } };
+            return new Dictionary<string, object>
+            {
+                { "anyOf", new List<object>
+                    {
+                        new Dictionary<string, object> { { "type", "string" } },
+                        new Dictionary<string, object> { { "type", "null" } }
+                    }
+                }
+            };
+        }
+
+        private static Dictionary<string, object> SchemaNumber() =>
+            new Dictionary<string, object> { { "type", "number" } };
+
+        private static Dictionary<string, object> SchemaArray(object items) =>
+            new Dictionary<string, object> { { "type", "array" }, { "items", items } };
+
+        private static Dictionary<string, object> SchemaObject(Dictionary<string, object> properties) =>
+            new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "properties", properties },
+                { "required", new List<object>(properties.Keys) },
+                { "additionalProperties", false }
+            };
+
+        private static Dictionary<string, object> BuildResponseSchema()
+        {
+            var onBadProps = new Dictionary<string, object>
+            {
+                { "type", SchemaString(false) },
+                { "subtype", SchemaString(true) },
+                { "faction", SchemaString(true) },
+                { "intensity", SchemaNumber() },
+                { "flavor", SchemaString(false) }
+            };
+            var onBadSchema = new Dictionary<string, object>
+            {
+                { "anyOf", new List<object> { SchemaObject(onBadProps), new Dictionary<string, object> { { "type", "null" } } } }
+            };
+
+            var eventProps = new Dictionary<string, object>
+            {
+                { "delay_hours", SchemaNumber() },
+                { "type", SchemaString(false) },
+                { "subtype", SchemaString(true) },
+                { "faction", SchemaString(true) },
+                { "intensity", SchemaNumber() },
+                { "circle_step", SchemaString(false) },
+                { "link", SchemaString(false) },
+                { "link_reason", SchemaString(true) },
+                { "expect", SchemaString(true) },
+                { "fire_when", SchemaString(false) },
+                { "note", SchemaString(true) },
+                { "flavor", SchemaString(false) },
+                { "on_bad", onBadSchema }
+            };
+            var eventSchema = SchemaObject(eventProps);
+
+            var arcProps = new Dictionary<string, object>
+            {
+                { "decision", SchemaString(false) },
+                { "arc_name", SchemaString(true) },
+                { "arc_faction", SchemaString(true) },
+                { "story_question", SchemaString(true) },
+                { "arc_reserved_types", SchemaArray(SchemaString(false)) },
+                { "queued_beats_action", SchemaString(true) },
+                { "arc_summary_so_far", SchemaString(true) },
+                { "unresolved_threads", SchemaArray(SchemaString(false)) },
+                { "events", SchemaArray(eventSchema) },
+                { "arc_reasoning", SchemaString(true) },
+                { "arc_flavor", SchemaString(true) },
+                { "closing_flavor", SchemaString(true) }
+            };
+            var arcSchema = SchemaObject(arcProps);
+
+            var scatteredProps = new Dictionary<string, object>
+            {
+                { "delay_hours", SchemaNumber() },
+                { "type", SchemaString(false) },
+                { "subtype", SchemaString(true) },
+                { "faction", SchemaString(true) },
+                { "intensity", SchemaNumber() },
+                { "note", SchemaString(true) },
+                { "flavor", SchemaString(false) }
+            };
+            var scatteredSchema = SchemaObject(scatteredProps);
+
+            var postureProps = new Dictionary<string, object>
+            {
+                { "current_blend", SchemaString(false) },
+                { "posture_reasoning", SchemaString(true) },
+                { "next_posture_hint", SchemaString(true) }
+            };
+            var postureSchema = SchemaObject(postureProps);
+
+            var rootProps = new Dictionary<string, object>
+            {
+                { "arc", arcSchema },
+                { "scattered_events", SchemaArray(scatteredSchema) },
+                { "posture", postureSchema },
+                { "next_call_days", SchemaNumber() },
+                { "overall_reasoning", SchemaString(false) }
+            };
+            return SchemaObject(rootProps);
         }
 
         // ========== Legacy calls (kept for fallback) ==========
@@ -355,47 +655,86 @@ Respond ONLY with valid JSON:
             try
             {
                 var response = new UnifiedResponse();
-                response.Reasoning = ExtractStringValue(json, "reasoning");
+                response.OverallReasoning = ExtractStringValue(json, "overall_reasoning");
+                if (string.IsNullOrEmpty(response.OverallReasoning))
+                {
+                    // Fallback for an old or malformed response that omits overall_reasoning.
+                    // A plain ExtractStringValue(json, "reasoning") over the WHOLE document risks
+                    // matching a "reasoning"-keyed field nested under "arc" or "posture" instead —
+                    // those come earlier in the document. Restrict the search to the tail of the
+                    // document: after the posture block if present, else after the arc block. If
+                    // neither is present (or the fallback still finds nothing there), leave
+                    // OverallReasoning null rather than risk grabbing a nested field — no logging,
+                    // this is a best-effort fallback for a field the model is not required to send.
+                    int searchFrom = -1;
+
+                    int postureKeyIdx = json.IndexOf("\"posture\"");
+                    if (postureKeyIdx >= 0)
+                    {
+                        string postureBlockForScope = ExtractGuardedBlock(json, postureKeyIdx);
+                        if (postureBlockForScope != null)
+                            searchFrom = json.IndexOf('{', postureKeyIdx) + postureBlockForScope.Length;
+                    }
+                    else
+                    {
+                        int arcKeyIdx = json.IndexOf("\"arc\"");
+                        if (arcKeyIdx >= 0)
+                        {
+                            string arcBlockForScope = ExtractGuardedBlock(json, arcKeyIdx);
+                            if (arcBlockForScope != null)
+                                searchFrom = json.IndexOf('{', arcKeyIdx) + arcBlockForScope.Length;
+                        }
+                    }
+
+                    if (searchFrom >= 0 && searchFrom < json.Length)
+                    {
+                        string tail = json.Substring(searchFrom);
+                        string fallback = ExtractStringValue(tail, "reasoning");
+                        if (!string.IsNullOrEmpty(fallback))
+                            response.OverallReasoning = fallback;
+                    }
+                }
                 response.NextCallDays = ExtractFloatValue(json, "next_call_days", 3.0f);
 
-                // Parse posture
+                // Parse posture — guarded: the first non-whitespace char after the colon must
+                // be '{', otherwise "posture": null would grab a later object's brace.
                 int postureStart = json.IndexOf("\"posture\"");
                 if (postureStart >= 0)
                 {
-                    int braceStart = json.IndexOf('{', postureStart);
-                    if (braceStart >= 0)
+                    string postureJson = ExtractGuardedBlock(json, postureStart);
+                    if (postureJson != null)
                     {
-                        string postureJson = ExtractBracedBlock(json, braceStart);
-                        if (postureJson != null)
+                        response.Posture = new StorytellingPosture
                         {
-                            response.Posture = new StorytellingPosture
-                            {
-                                CurrentBlend = ExtractStringValue(postureJson, "current_blend"),
-                                Reasoning = ExtractStringValue(postureJson, "reasoning"),
-                                NextPostureHint = ExtractStringValue(postureJson, "next_posture_hint")
-                            };
-                        }
+                            CurrentBlend = ExtractStringValue(postureJson, "current_blend"),
+                            Reasoning = ExtractStringValue(postureJson, "posture_reasoning"),
+                            NextPostureHint = ExtractStringValue(postureJson, "next_posture_hint")
+                        };
                     }
                 }
 
-                // Parse arc
+                // Parse arc — same guard: "arc": null must not fall through to the next brace.
                 int arcStart = json.IndexOf("\"arc\"");
                 if (arcStart >= 0)
                 {
-                    int braceStart = json.IndexOf('{', arcStart);
-                    if (braceStart >= 0)
+                    string arcJson = ExtractGuardedBlock(json, arcStart);
+                    if (arcJson != null)
                     {
-                        string arcJson = ExtractBracedBlock(json, braceStart);
-                        if (arcJson != null)
+                        response.Arc = new NarrativeArcDecision
                         {
-                            response.Arc = new NarrativeArcDecision
-                            {
-                                Decision = ExtractStringValue(arcJson, "decision"),
-                                ArcName = ExtractStringValue(arcJson, "arc_name"),
-                                Reasoning = ExtractStringValue(arcJson, "reasoning"),
-                                Events = ParseArcEvents(arcJson)
-                            };
-                        }
+                            Decision = ExtractStringValue(arcJson, "decision"),
+                            ArcName = ExtractStringValue(arcJson, "arc_name"),
+                            ArcFaction = ExtractStringValue(arcJson, "arc_faction"),
+                            ArcFlavor = ExtractStringValue(arcJson, "arc_flavor"),
+                            Reasoning = ExtractStringValue(arcJson, "arc_reasoning"),
+                            StoryQuestion = ExtractStringValue(arcJson, "story_question"),
+                            ClosingFlavor = ExtractStringValue(arcJson, "closing_flavor"),
+                            Events = ParseArcEvents(arcJson),
+                            ArcReservedTypes = ExtractStringArray(arcJson, "arc_reserved_types"),
+                            QueuedBeatsAction = ExtractStringValue(arcJson, "queued_beats_action"),
+                            ArcSummarySoFar = ExtractStringValue(arcJson, "arc_summary_so_far"),
+                            UnresolvedThreads = ExtractStringArray(arcJson, "unresolved_threads")
+                        };
                     }
                 }
 
@@ -460,7 +799,8 @@ Respond ONLY with valid JSON:
                     Faction = ExtractStringValue(eventJson, "faction"),
                     Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                     Animal = ExtractStringValue(eventJson, "animal"),
-                    Note = ExtractStringValue(eventJson, "note")
+                    Note = ExtractStringValue(eventJson, "note"),
+                            Flavor = ExtractStringValue(eventJson, "flavor")
                 };
 
                 events.Add(scattered);
@@ -506,7 +846,8 @@ Respond ONLY with valid JSON:
                             Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                             DelayHours = ExtractIntValue(eventJson, "delay_hours", 0),
                             Animal = ExtractStringValue(eventJson, "animal"),
-                            Note = ExtractStringValue(eventJson, "note")
+                            Note = ExtractStringValue(eventJson, "note"),
+                            Flavor = ExtractStringValue(eventJson, "flavor")
                         };
                     }
                 }
@@ -545,6 +886,32 @@ Respond ONLY with valid JSON:
                 string eventJson = ExtractBracedBlock(arrayContent, objStart);
                 if (eventJson == null) break;
 
+                // Advance by the ORIGINAL block length, not the length after on_bad stripping
+                // below — eventJson is reassigned to a shorter string, and using its length here
+                // would desync `pos` from arrayContent and corrupt the rest of the array scan.
+                int originalLength = eventJson.Length;
+
+                // Guarded the same way as arc/posture: "on_bad": null must not fall through
+                // to a later unrelated object.
+                string onBadRaw = null;
+                int onBadIdx = eventJson.IndexOf("\"on_bad\"");
+                if (onBadIdx >= 0)
+                {
+                    onBadRaw = ExtractGuardedBlock(eventJson, onBadIdx);
+                    if (onBadRaw != null)
+                    {
+                        // on_bad has its OWN "flavor"/"faction"/"subtype"/"intensity"/"type" keys.
+                        // The extractors below match the first occurrence of each key anywhere in
+                        // eventJson, so left in place, on_bad's sub-object could shadow the beat's
+                        // own fields (e.g. if on_bad's "flavor" happens to appear before the
+                        // beat's real "flavor" key). Strip the whole "on_bad": {...} substring out
+                        // of eventJson before reading the beat's own fields.
+                        int blockStart = eventJson.IndexOf('{', onBadIdx);
+                        int blockEnd = blockStart + onBadRaw.Length;
+                        eventJson = eventJson.Remove(onBadIdx, blockEnd - onBadIdx);
+                    }
+                }
+
                 var arcEvent = new ArcEvent
                 {
                     DelayHours = ExtractFloatValue(eventJson, "delay_hours", 0),
@@ -553,11 +920,18 @@ Respond ONLY with valid JSON:
                     Faction = ExtractStringValue(eventJson, "faction"),
                     Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                     Animal = ExtractStringValue(eventJson, "animal"),
-                    Note = ExtractStringValue(eventJson, "note")
+                    Note = ExtractStringValue(eventJson, "note"),
+                    Flavor = ExtractStringValue(eventJson, "flavor"),
+                    CircleStep = ExtractStringValue(eventJson, "circle_step"),
+                    Link = ExtractStringValue(eventJson, "link"),
+                    LinkReason = ExtractStringValue(eventJson, "link_reason"),
+                    Expect = ExtractStringValue(eventJson, "expect"),
+                    FireWhen = ExtractStringValue(eventJson, "fire_when"),
+                    OnBadJson = onBadRaw
                 };
 
                 events.Add(arcEvent);
-                pos = objStart + eventJson.Length;
+                pos = objStart + originalLength;
             }
 
             return events;
@@ -611,7 +985,7 @@ Respond ONLY with valid JSON:
                 string requestBody = SimpleJson.Serialize(new
                 {
                     model = MODEL,
-                    max_tokens = 500,
+                    max_tokens = 4000,
                     system = systemPrompt,
                     messages = new[]
                     {
@@ -629,6 +1003,8 @@ Respond ONLY with valid JSON:
                     ClaudeLogger.LogApiError($"HTTP {response.StatusCode}", responseJson);
                     return null;
                 }
+
+                LogUsage(responseJson, "single");
 
                 string claudeText = ExtractTextContent(responseJson);
                 if (string.IsNullOrEmpty(claudeText))
@@ -684,7 +1060,8 @@ Respond ONLY with valid JSON:
                                 Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                                 DelayHours = ExtractIntValue(eventJson, "delay_hours", 0),
                                 Animal = ExtractStringValue(eventJson, "animal"),
-                                Note = ExtractStringValue(eventJson, "note")
+                                Note = ExtractStringValue(eventJson, "note"),
+                            Flavor = ExtractStringValue(eventJson, "flavor")
                             };
                         }
                     }
@@ -701,7 +1078,25 @@ Respond ONLY with valid JSON:
 
         // ========== String/JSON utilities ==========
 
-        private string ExtractBracedBlock(string json, int braceStart)
+        /// <summary>
+        /// Given the index of a "key" token, finds the colon after it and returns the braced
+        /// object that follows IF the first non-whitespace character after the colon is '{'.
+        /// Guards against "key": null (or any non-object value) being followed later in the
+        /// document by an unrelated object, which a naive IndexOf('{', keyStart) would grab.
+        /// </summary>
+        private static string ExtractGuardedBlock(string json, int keyStart)
+        {
+            int colonPos = json.IndexOf(':', keyStart);
+            if (colonPos < 0) return null;
+
+            int cursor = colonPos + 1;
+            while (cursor < json.Length && char.IsWhiteSpace(json[cursor])) cursor++;
+
+            if (cursor >= json.Length || json[cursor] != '{') return null;
+            return ExtractBracedBlock(json, cursor);
+        }
+
+        private static string ExtractBracedBlock(string json, int braceStart)
         {
             int depth = 1;
             int braceEnd = braceStart + 1;
@@ -726,7 +1121,7 @@ Respond ONLY with valid JSON:
             return json.Substring(braceStart, braceEnd - braceStart);
         }
 
-        private string ExtractStringValue(string json, string key)
+        private static string ExtractStringValue(string json, string key)
         {
             string pattern = $"\"{key}\":";
             int keyIndex = json.IndexOf(pattern);
@@ -755,7 +1150,7 @@ Respond ONLY with valid JSON:
             return sb.ToString();
         }
 
-        private float ExtractFloatValue(string json, string key, float defaultValue)
+        private static float ExtractFloatValue(string json, string key, float defaultValue)
         {
             string pattern = $"\"{key}\":";
             int keyIndex = json.IndexOf(pattern);
@@ -781,9 +1176,106 @@ Respond ONLY with valid JSON:
             return defaultValue;
         }
 
-        private int ExtractIntValue(string json, string key, int defaultValue)
+        private static int ExtractIntValue(string json, string key, int defaultValue)
         {
             return (int)ExtractFloatValue(json, key, defaultValue);
+        }
+
+        /// <summary>
+        /// Extracts a JSON array of quoted strings (e.g. "arc_reserved_types": ["A", "B"]).
+        /// There is no general array-of-objects extractor reused here on purpose — this only
+        /// needs to split top-level quoted strings inside the bracket, not nested objects.
+        /// Guarded the same way as ExtractGuardedBlock: only whitespace between the colon and
+        /// the '[' counts as this key's array.
+        /// </summary>
+        private static List<string> ExtractStringArray(string json, string key)
+        {
+            var result = new List<string>();
+            string pattern = $"\"{key}\":";
+            int keyIndex = json.IndexOf(pattern);
+            if (keyIndex < 0) return result;
+
+            int cursor = keyIndex + pattern.Length;
+            while (cursor < json.Length && char.IsWhiteSpace(json[cursor])) cursor++;
+            if (cursor >= json.Length || json[cursor] != '[') return result;
+
+            int arrayStart = cursor;
+            int depth = 1;
+            int i = arrayStart + 1;
+            while (i < json.Length && depth > 0)
+            {
+                if (json[i] == '[') depth++;
+                else if (json[i] == ']') depth--;
+                i++;
+            }
+            if (depth != 0) return result;
+
+            string content = json.Substring(arrayStart + 1, i - arrayStart - 2);
+
+            bool inString = false;
+            bool escaped = false;
+            var sb = new StringBuilder();
+            foreach (char c in content)
+            {
+                if (escaped) { sb.Append(c); escaped = false; continue; }
+                if (c == '\\') { escaped = true; continue; }
+                if (c == '"')
+                {
+                    inString = !inString;
+                    if (!inString) { result.Add(sb.ToString()); sb.Clear(); }
+                    continue;
+                }
+                if (inString) sb.Append(c);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Public wrappers so ClaudeStorytellerComp can decode an on_bad block (raw braced JSON
+        /// stored on QueuedEvent.OnBadJson) at fire time without duplicating the string parser.
+        /// </summary>
+        public static string ExtractOnBadString(string onBadJson, string key)
+        {
+            if (string.IsNullOrEmpty(onBadJson)) return null;
+            return ExtractStringValue(onBadJson, key);
+        }
+
+        public static float ExtractOnBadFloat(string onBadJson, string key, float defaultValue)
+        {
+            if (string.IsNullOrEmpty(onBadJson)) return defaultValue;
+            return ExtractFloatValue(onBadJson, key, defaultValue);
+        }
+
+        private void LogUsage(string responseJson, string callType)
+        {
+            try
+            {
+                int inTok = ExtractIntValue(responseJson, "input_tokens", 0);
+                int outTok = ExtractIntValue(responseJson, "output_tokens", 0);
+                int cacheRead = ExtractIntValue(responseJson, "cache_read_input_tokens", 0);
+                if (inTok == 0 && outTok == 0) return;
+
+                sessionCalls++;
+                sessionInputTokens += inTok;
+                sessionOutputTokens += outTok;
+
+                double callCost = (inTok * INPUT_COST_PER_MTOK + outTok * OUTPUT_COST_PER_MTOK) / 1000000.0;
+                double sessionCost = (sessionInputTokens * INPUT_COST_PER_MTOK
+                                    + sessionOutputTokens * OUTPUT_COST_PER_MTOK) / 1000000.0;
+
+                ClaudeLogger.LogEntry("USAGE",
+                    $"[{callType}] {inTok} in / {outTok} out" +
+                    (cacheRead > 0 ? $" ({cacheRead} cached)" : "") +
+                    $" = ${callCost:F4}\n" +
+                    $"Session total: {sessionCalls} call(s), " +
+                    $"{sessionInputTokens} in / {sessionOutputTokens} out = ${sessionCost:F4}"
+                );
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"[ClaudeStoryteller] LogUsage failed: {ex.Message}");
+            }
         }
 
         private string ExtractTextContent(string responseJson)

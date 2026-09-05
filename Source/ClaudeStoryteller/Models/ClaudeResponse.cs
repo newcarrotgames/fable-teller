@@ -21,8 +21,8 @@ namespace ClaudeStoryteller.Models
         // How many days until the next unified call
         public float NextCallDays { get; set; }
 
-        // Overall reasoning for this call's decisions
-        public string Reasoning { get; set; }
+        // Overall reasoning for this call's decisions (top-level "overall_reasoning" key)
+        public string OverallReasoning { get; set; }
     }
 
     public class ScatteredEvent
@@ -38,7 +38,8 @@ namespace ClaudeStoryteller.Models
         public string Faction { get; set; }
         public float Intensity { get; set; }
         public string Animal { get; set; }
-        public string Note { get; set; }
+        public string Note { get; set; }          // debug log only
+        public string Flavor { get; set; }        // shown to the player
     }
 
     public class EventDecision
@@ -51,10 +52,20 @@ namespace ClaudeStoryteller.Models
 
     public class NarrativeArcDecision
     {
-        public string Decision { get; set; } // "start_arc", "continue", "skip"
+        public string Decision { get; set; } // "start_arc", "continue", "end_arc", "skip"
         public string ArcName { get; set; }
+        public string ArcFaction { get; set; }      // exact faction name, "same_as_opening", or null
+        public string StoryQuestion { get; set; }   // start_arc; the in-world question the arc answers
+        public string ClosingFlavor { get; set; }   // end_arc only; shown to the player
         public List<ArcEvent> Events { get; set; }
-        public string Reasoning { get; set; }
+        public string Reasoning { get; set; }     // debug log only (parsed from "arc_reasoning")
+        public string ArcFlavor { get; set; }     // shown to the player
+
+        // ---- Phase 2 ----
+        public List<string> ArcReservedTypes { get; set; }  // scattered events of these types are dropped while active
+        public string QueuedBeatsAction { get; set; }       // "keep" | "replace"
+        public string ArcSummarySoFar { get; set; }          // 2-3 sentences, Claude's own memory
+        public List<string> UnresolvedThreads { get; set; }  // end_arc; 1-2 debug/memory items
     }
 
     public class StorytellingPosture
@@ -80,7 +91,8 @@ namespace ClaudeStoryteller.Models
         public float Intensity { get; set; }
         public int DelayHours { get; set; }
         public string Animal { get; set; }
-        public string Note { get; set; }
+        public string Note { get; set; }          // debug log only
+        public string Flavor { get; set; }        // shown to the player
     }
 
     public class ArcEvent
@@ -91,12 +103,25 @@ namespace ClaudeStoryteller.Models
             DelayHours = 0;
         }
         public float DelayHours { get; set; }
-        public string Type { get; set; }
+        public string Type { get; set; }          // may be "none" (letter-only beat)
         public string Subtype { get; set; }
-        public string Faction { get; set; }
+        public string Faction { get; set; }       // exact name, "same_as_opening", or null
         public float Intensity { get; set; }
         public string Animal { get; set; }
-        public string Note { get; set; }
+        public string Note { get; set; }          // debug log only
+        public string Flavor { get; set; }        // shown to the player
+
+        // ---- Phase 2 (all read from the per-beat eventJson sub-block) ----
+        public string CircleStep { get; set; }    // "need" | "search" | "find" | "take" | "return" | "change"
+        public string Link { get; set; }          // "and" | "but" | "therefore"
+        public string LinkReason { get; set; }    // debug log only
+        public string Expect { get; set; }        // debug log only
+        public string FireWhen { get; set; }       // "scheduled" | "after_calm"
+
+        // Raw braced JSON of the optional "on_bad" sub-object (type/subtype/faction/intensity/flavor),
+        // kept unparsed here and only decoded via ClaudeApiClient's static extractors at fire time —
+        // it applies to the NEXT beat only, so there is no value in eagerly building a typed object.
+        public string OnBadJson { get; set; }
     }
 
     // ========== Timer Adjustment (clamped in code) ==========
@@ -123,7 +148,7 @@ namespace ClaudeStoryteller.Models
         public int DaysSinceLastDisease { get; set; }
         public int DaysSinceArcCompleted { get; set; }
         public string ActiveArc { get; set; } // null if no arc running
-        public int ActiveArcEventsRemaining { get; set; }
+        public int QueuedArcBeats { get; set; }
     }
 
     // ========== Vanilla Reference (static data for Claude) ==========
@@ -161,7 +186,8 @@ namespace ClaudeStoryteller.Models
     {
         public string ArcName { get; set; }
         public List<ArcEvent> Events { get; set; }
-        public string Reasoning { get; set; }
+        public string Reasoning { get; set; }     // debug log only
+        public string ArcFlavor { get; set; }     // shown to the player
         public TimerAdjustment AdjustTimers { get; set; }
     }
 }

@@ -18,7 +18,7 @@ namespace ClaudeStoryteller
             {
                 summary.Last3Arcs = new List<Models.ArcSummaryEntry>();
                 summary.OverusedEvents = new List<string>();
-                summary.UnderusedEvents = new List<string>(allAvailableEvents);
+                summary.UnderusedEvents = allAvailableEvents.Take(8).ToList();
                 summary.OverusedOpeners = new List<string>();
                 summary.DominantPattern = "none — this is the first arc";
                 summary.Instruction = "This is the first narrative arc. Be creative and set a strong opening tone.";
@@ -33,7 +33,14 @@ namespace ClaudeStoryteller
                     Name = a.ArcName,
                     Events = a.Events,
                     Outcome = a.Outcome,
-                    Day = a.StartDay
+                    Day = a.StartDay,
+                    Question = a.StoryQuestion,
+                    Summary = a.Summary,
+                    Deaths = a.Deaths,
+                    ColonistDelta = a.ColonistDelta,
+                    Links = a.Links,
+                    Faction = a.Faction,
+                    UnresolvedThreads = a.UnresolvedThreads
                 })
                 .ToList();
 
@@ -79,10 +86,12 @@ namespace ClaudeStoryteller
                 .Select(kv => $"{kv.Key} ({kv.Value}x as opener)")
                 .ToList();
 
-            // Underused events — available but never or rarely used
+            // Underused events — available but never or rarely used. Capped at 8 so the prompt
+            // does not grow unbounded as the event pool widens.
             var usedEvents = new HashSet<string>(eventCounts.Keys);
             summary.UnderusedEvents = allAvailableEvents
                 .Where(e => !eventCounts.ContainsKey(e) || eventCounts[e] <= 1)
+                .Take(8)
                 .ToList();
 
             // Dominant pattern — most common sequential pair
@@ -100,13 +109,44 @@ namespace ClaudeStoryteller
             }
 
             // Build instruction
-            summary.Instruction = BuildInstruction(summary, arcLog.Count);
+            summary.Instruction = BuildInstruction(summary, arcLog, arcLog.Count);
 
             return summary;
         }
 
-        private static string BuildInstruction(Models.ArcHistorySummary summary, int arcCount)
+        private static string BuildInstruction(Models.ArcHistorySummary summary, List<ArcLogEntry> arcLog, int arcCount)
         {
+            var lastArc = arcLog[arcLog.Count - 1];
+            string prefix =
+                $"The last arc asked: '{lastArc.StoryQuestion}' and ended '{lastArc.Outcome}' ({lastArc.Summary}). " +
+                "Ask a different question and use a different first beat. ";
+
+            if (lastArc.Outcome == "timed_out" || lastArc.Outcome == "stalled" || lastArc.Outcome == "abandoned")
+            {
+                prefix += "The previous arc was ended by the code because it stalled; end arcs deliberately with end_arc. ";
+            }
+
+            // Repeated connector-pair sequence identical to the previous arc.
+            if (summary.Last3Arcs.Count >= 2)
+            {
+                var lastLinks = summary.Last3Arcs[summary.Last3Arcs.Count - 1].Links;
+                var prevLinks = summary.Last3Arcs[summary.Last3Arcs.Count - 2].Links;
+                if (lastLinks != null && prevLinks != null && lastLinks.Count > 1 && lastLinks.SequenceEqual(prevLinks))
+                {
+                    prefix += $"The last two arcs used the identical connector sequence ({string.Join("->", lastLinks)}). Vary it this time. ";
+                }
+            }
+
+            // Repeated 'take' mechanism across the last 3 arcs.
+            var recentTakeTypes = arcLog.Skip(System.Math.Max(0, arcLog.Count - 3))
+                .SelectMany(a => a.TakeEventTypes ?? new List<string>())
+                .ToList();
+            var repeatedTake = recentTakeTypes.GroupBy(t => t).FirstOrDefault(g => g.Count() > 1);
+            if (repeatedTake != null)
+            {
+                prefix += $"The 'take' mechanism {repeatedTake.Key} has repeated across recent arcs. Use a different price. ";
+            }
+
             var parts = new List<string>();
 
             if (summary.OverusedOpeners.Count > 0)
@@ -132,7 +172,7 @@ namespace ClaudeStoryteller
 
             parts.Add("Create a structurally different arc from the previous ones. Surprise the player.");
 
-            return string.Join(". ", parts) + ".";
+            return prefix + string.Join(". ", parts) + ".";
         }
     }
 }
