@@ -240,6 +240,9 @@ You also receive excluded_this_call — a small random set of events removed thi
 You receive highlighted_events — randomly suggested events to consider. Not mandatory, but fight the tendency to always pick the same defaults.
 You receive storytelling_mood — a creative theme to color your choices this call.
 You receive category_usage_last_5 — how many recent events came from each category. Spread across categories.
+You receive event_glossary — defName to label, for mod-added events only. A defName absent from it is vanilla and you already know it.
+Mod events are ordinary choices, not exotic ones: prefer them when the label fits the beat you want, and do not assume behaviour the label does not state.
+Whatever the source, echo the defName back exactly as given. Never return a label.
 
 RAID SUBTYPES (if RaidEnemy available): ""assault"", ""sapper"", ""siege"", ""drop_pods""
 FACTIONS: ""Pirate"", ""Tribal"", ""Mechanoid"" — use what is in available_factions. Rotate factions. An arc may pin a faction with arc.arc_faction (an exact name from available_factions); later beats can reuse it via faction: ""same_as_opening"".

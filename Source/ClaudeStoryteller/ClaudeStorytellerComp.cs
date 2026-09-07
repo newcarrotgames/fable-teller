@@ -230,6 +230,29 @@ namespace ClaudeStoryteller
             return type;
         }
 
+        // The three sets above are the curated vanilla/DLC classification. Mod-added
+        // incidents are classified at runtime from their IncidentDef category, so every
+        // membership test has to consult both. Missing this would let a mod raid slip past
+        // the difficulty gate and past threat spacing.
+
+        private static bool IsThreat(string resolvedType)
+        {
+            return ThreatEvents.Contains(resolvedType)
+                || ColonyStateCollector.IsThreatEvent(resolvedType);
+        }
+
+        private static bool IsMajorThreat(string resolvedType)
+        {
+            return MajorThreatEvents.Contains(resolvedType)
+                || ColonyStateCollector.IsMajorThreatEvent(resolvedType);
+        }
+
+        private static bool IsDisease(string resolvedType)
+        {
+            return DiseaseEvents.Contains(resolvedType)
+                || ColonyStateCollector.IsDiseaseEvent(resolvedType);
+        }
+
         private DifficultyInfo GetDifficulty()
         {
             int currentTick = Find.TickManager.TicksGame;
@@ -405,7 +428,7 @@ namespace ClaudeStoryteller
             foreach (var queued in readyEvents)
             {
                 // Disease safety net — block even if it somehow got queued
-                if (DiseaseEvents.Contains(ResolveEventName(queued.EventType)) && !ColonyStateCollector.CanFireDisease())
+                if (IsDisease(ResolveEventName(queued.EventType)) && !ColonyStateCollector.CanFireDisease())
                 {
                     ClaudeLogger.LogEventSkipped($"Disease blocked by cooldown: {queued.EventType}");
                     if (queued.SourceCycle == "narrative")
@@ -641,7 +664,7 @@ namespace ClaudeStoryteller
 
                     // Disease safety net
                     string resolvedType = ResolveEventName(scattered.Type);
-                    if (DiseaseEvents.Contains(resolvedType) && !ColonyStateCollector.CanFireDisease())
+                    if (IsDisease(resolvedType) && !ColonyStateCollector.CanFireDisease())
                     {
                         ClaudeLogger.LogEventSkipped($"Scattered disease blocked by cooldown: {scattered.Type}");
                         continue;
@@ -719,7 +742,7 @@ namespace ClaudeStoryteller
                     continue;
                 }
 
-                bool isThreat = ThreatEvents.Contains(resolvedType);
+                bool isThreat = IsThreat(resolvedType);
                 if (isThreat && queuedArcBeats.Count > 0)
                 {
                     int fireTick = currentTick + (int)(s.DelayHours * GenDate.TicksPerHour);
@@ -739,8 +762,8 @@ namespace ClaudeStoryteller
             if (kept.Count <= cap) return kept;
 
             // Never drop a positive event for the cap before a threat is dropped.
-            var positives = kept.Where(s => !ThreatEvents.Contains(ResolveEventName(s.Type))).ToList();
-            var threats = kept.Where(s => ThreatEvents.Contains(ResolveEventName(s.Type))).ToList();
+            var positives = kept.Where(s => !IsThreat(ResolveEventName(s.Type))).ToList();
+            var threats = kept.Where(s => IsThreat(ResolveEventName(s.Type))).ToList();
 
             var result = new List<ScatteredEvent>();
             foreach (var p in positives) { if (result.Count < cap) result.Add(p); }
@@ -894,7 +917,7 @@ namespace ClaudeStoryteller
 
                 // Block multiple diseases in same arc
                 string resolvedType = ResolveEventName(arcEvent.Type);
-                if (DiseaseEvents.Contains(resolvedType))
+                if (IsDisease(resolvedType))
                 {
                     if (hasDiseaseInArc)
                     {
@@ -1221,7 +1244,7 @@ namespace ClaudeStoryteller
 
                 bool isArc = !string.IsNullOrEmpty(queued.ArcName);
                 string label = string.IsNullOrEmpty(queued.ArcName) ? "The world turns" : queued.ArcName;
-                bool isThreat = ThreatEvents.Contains(ResolveEventName(queued.EventType));
+                bool isThreat = IsThreat(ResolveEventName(queued.EventType));
 
                 if (LetterFlavorPatch.PatchActive)
                 {
@@ -1303,20 +1326,20 @@ namespace ClaudeStoryteller
             var diff = GetDifficulty();
             string resolvedType = ResolveEventName(type);
 
-            if (!diff.AllowThreats && ThreatEvents.Contains(resolvedType))
+            if (!diff.AllowThreats && IsThreat(resolvedType))
             {
                 ClaudeLogger.LogEventSkipped($"Difficulty [{diff.Label}] blocks threat: {type}");
                 return null;
             }
 
-            if (!diff.AllowMajorThreats && MajorThreatEvents.Contains(resolvedType))
+            if (!diff.AllowMajorThreats && IsMajorThreat(resolvedType))
             {
                 ClaudeLogger.LogEventSkipped($"Difficulty [{diff.Label}] blocks major threat: {type}");
                 return null;
             }
 
             // Disease safety net
-            if (DiseaseEvents.Contains(resolvedType) && !ColonyStateCollector.CanFireDisease())
+            if (IsDisease(resolvedType) && !ColonyStateCollector.CanFireDisease())
             {
                 ClaudeLogger.LogEventSkipped($"Disease cooldown active, blocking: {type}");
                 return null;
@@ -1331,7 +1354,18 @@ namespace ClaudeStoryteller
                 return null;
             }
 
-            var parms = StorytellerUtility.DefaultParmsNow(incidentDef.category, target);
+            // World-targeted incidents (Eclipse, GiveQuest_Random, mod world conditions) can only
+            // fire against Find.World; vanilla's RandomQuest comp does the same during the World
+            // pass. We only run in the Map pass, so pick the target per def here.
+            IIncidentTarget fireTarget = ColonyStateCollector.ResolveTarget(incidentDef, target as Map);
+            if (fireTarget == null)
+            {
+                ClaudeLogger.LogEventSkipped($"No allowed target for {type} (resolved: {resolvedType}; tags: " +
+                    string.Join(",", incidentDef.targetTags?.Select(t => t.defName) ?? Enumerable.Empty<string>()) + ")");
+                return null;
+            }
+
+            var parms = StorytellerUtility.DefaultParmsNow(incidentDef.category, fireTarget);
             parms.points *= clampedIntensity;
 
             if (!string.IsNullOrEmpty(faction))

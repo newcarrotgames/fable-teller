@@ -7,6 +7,7 @@ using ClaudeStoryteller.Models;
 
 namespace ClaudeStoryteller
 {
+    [StaticConstructorOnStartup]
     public static class ColonyStateCollector
     {
         // Event categories for Claude to understand what's available
@@ -77,12 +78,251 @@ namespace ClaudeStoryteller
             AllKnownEvents.Add("ShortCircuit");
             AllKnownEvents.Add("Alphabeavers");
             AllKnownEvents.Add("MeteoriteImpact");
+
+            // [StaticConstructorOnStartup] means this runs after every def is loaded, so the
+            // sweep happens once at startup rather than inside the first API call's latency.
+            // It also makes EVENT_POOL_DISCOVERED a load-time health signal you can grep for
+            // without waiting for a storyteller call. EnsureDiscovered stays idempotent and
+            // is still called defensively from the accessors below.
+            try { EnsureDiscovered(); }
+            catch (Exception e)
+            {
+                // An exception escaping a static constructor makes every later access to
+                // this type throw TypeInitializationException. Discovery is an enhancement;
+                // it must never be able to take the collector down with it — and neither may
+                // this handler, so the file logger is itself guarded and Verse.Log (safe before
+                // a game exists) carries the message if the file logger cannot.
+                try { ClaudeLogger.LogEntry("EVENT_POOL_DISCOVERY_FAILED", e.ToString()); }
+                catch { }
+                try { Log.Error("[ClaudeStoryteller] EVENT_POOL_DISCOVERY_FAILED: " + e); }
+                catch { }
+            }
+        }
+
+        // ========== Runtime discovery ==========
+        // The sets above are the curated vanilla/DLC seed. Everything else the modlist
+        // provides is discovered from the DefDatabase on first use, so a new event mod is
+        // picked up without a code change. Seed membership always wins: a hand-classified
+        // vanilla name keeps its category no matter what its def says.
+
+        private static bool _discovered = false;
+
+        // defName -> human label, for discovered defs only. Claude knows what
+        // "ToxicFallout" means; it does not know what "LE_RiseTrees" means.
+        private static readonly Dictionary<string, string> DiscoveredLabels =
+            new Dictionary<string, string>();
+
+        // Scripted/endgame incidents are storyteller-fireable in principle but are never
+        // a sensible narrative beat. Everything else is offered and left to CanFireNow.
+        private static readonly HashSet<string> ExcludedCategories = new HashSet<string>
+        {
+            "EndGame"
+        };
+
+        // Script-only incidents that became reachable once World targets were allowed. Each is
+        // fired by a BaseStoryteller comp on its own schedule (ship escape day 20, Royal Ascent
+        // every 22 days, intro quests day 8/26) or by the game-over flow; Claude picking one as a
+        // story beat would break that pacing. Map-targeted scripted quests (Beggars, Pilgrims,
+        // Mechanitor complex) are deliberately NOT here — doubling those is harmless flavour.
+        private static readonly HashSet<string> ExcludedDefNames = new HashSet<string>
+        {
+            "GiveQuest_EndGame_ShipEscape",
+            "GiveQuest_EndGame_ArchonexusVictory",
+            "GiveQuest_EndGame_RoyalAscent",
+            "GiveQuest_Intro_Wimp",
+            "GiveQuest_Intro_Deserter",
+            "GameEndedWanderersJoin"
+        };
+
+        // Discovery-only. ThreatBig is RimWorld's own "this is a big deal" marker, and the
+        // difficulty gate in ClaudeStorytellerComp needs mod raids to trip it too.
+        private static readonly HashSet<string> MajorThreatEventSet = new HashSet<string>();
+
+        private static void EnsureDiscovered()
+        {
+            if (_discovered) return;
+
+            var allDefs = DefDatabase<IncidentDef>.AllDefsListForReading;
+
+            // If anything touches this type before defs finish loading, the sweep would find
+            // nothing and latch an empty result permanently. Leave _discovered false and let
+            // a later caller retry.
+            if (allDefs == null || allDefs.Count == 0) return;
+
+            _discovered = true;
+
+            var seeded = new HashSet<string>(AllKnownEvents);
+            var seedFound = new HashSet<string>();
+            var perMod = new Dictionary<string, int>();
+            var skipped = new List<string>();
+            int added = 0;
+
+            foreach (var def in allDefs)
+            {
+                if (def == null || def.defName == null) continue;
+                if (ExcludedDefNames.Contains(def.defName))
+                {
+                    skipped.Add(def.defName + " (scripted)");
+                    continue;
+                }
+
+                string modName = "unknown";
+                try { modName = def.modContentPack?.Name ?? "unknown"; } catch { }
+
+                if (seeded.Contains(def.defName))
+                {
+                    seedFound.Add(def.defName);
+                    perMod[modName] = perMod.TryGetValue(modName, out int seedCount) ? seedCount + 1 : 1;
+                    continue;
+                }
+                if (def.category == null) { skipped.Add(def.defName + " (no category)"); continue; }
+                if (ExcludedCategories.Contains(def.category.defName))
+                {
+                    skipped.Add(def.defName + " (" + def.category.defName + ")");
+                    continue;
+                }
+
+                // A def whose worker won't construct is unusable; skip it quietly rather
+                // than letting it throw once per call inside GetAvailableEvents.
+                try
+                {
+                    if (def.Worker == null) { skipped.Add(def.defName + " (no worker)"); continue; }
+                }
+                catch (Exception e)
+                {
+                    skipped.Add(def.defName + " (worker threw " + e.GetType().Name + ")");
+                    continue;
+                }
+
+                switch (def.category.defName)
+                {
+                    case "DiseaseHuman":
+                    case "DiseaseAnimal":
+                        DiseaseEvents.Add(def.defName);
+                        break;
+                    case "ThreatBig":
+                    case "ThreatSmall":
+                    case "DeepDrillInfestation":
+                        ThreatEventSet.Add(def.defName);
+                        if (def.category.defName == "ThreatBig")
+                            MajorThreatEventSet.Add(def.defName);
+                        break;
+                    case "FactionArrival":
+                    case "OrbitalVisitor":
+                    case "AllyAssistance":
+                    case "GiveQuest":
+                    case "ShipChunkDrop":
+                        PositiveEvents.Add(def.defName);
+                        break;
+                    default:
+                        // Misc, Special, and anything a mod invents. A def that installs a
+                        // GameCondition is ambient pressure — that is what "weather" means
+                        // to Claude here. The rest falls through to "other".
+                        if (def.gameCondition != null)
+                            WeatherEvents.Add(def.defName);
+                        break;
+                }
+
+                AllKnownEvents.Add(def.defName);
+                perMod[modName] = perMod.TryGetValue(modName, out int modCount) ? modCount + 1 : 1;
+
+                string label = null;
+                try { label = def.LabelCap; } catch { }
+                if (!string.IsNullOrEmpty(label) && label != def.defName)
+                    DiscoveredLabels[def.defName] = label;
+
+                added++;
+            }
+
+            // Curated names that are not in this install (a DLC the player lacks, a renamed def).
+            // They stay in AllKnownEvents and are filtered by GetNamedSilentFail at call time,
+            // but they must not be mistaken for real pool members when reading the count.
+            var seedMissing = seeded.Where(s => !seedFound.Contains(s)).OrderBy(s => s, StringComparer.Ordinal).ToList();
+            string perModText = string.Join(", ",
+                perMod.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                      .Select(kv => kv.Key + " " + kv.Value));
+
+            ClaudeLogger.LogEntry("EVENT_POOL_DISCOVERED",
+                "DefDatabase: " + allDefs.Count + " IncidentDefs. Pool: " + (seedFound.Count + added) +
+                " real (" + seedFound.Count + " seed present + " + added + " discovered); " +
+                seedMissing.Count + " seed names missing from this install" +
+                (seedMissing.Count > 0 ? " [" + string.Join(", ", seedMissing) + "]" : "") + "; " +
+                skipped.Count + " skipped" +
+                (skipped.Count > 0 ? " [" + string.Join(", ", skipped) + "]" : "") + "." +
+                Environment.NewLine + "By mod: " + perModText);
+
+            ClaudeLogger.LogEntry("EVENT_POOL_LIST", BuildPoolListText());
+        }
+
+        /// <summary>
+        /// Every real pool member, grouped the same way Claude will see them, sorted, one bucket
+        /// per line. Logged once at startup so "what events does the storyteller actually have"
+        /// is answerable with grep instead of by opening a STATE_SENT payload.
+        /// </summary>
+        private static string BuildPoolListText()
+        {
+            var buckets = new Dictionary<string, List<string>>
+            {
+                { "weather", new List<string>() },
+                { "threats", new List<string>() },
+                { "positive", new List<string>() },
+                { "disease", new List<string>() },
+                { "other", new List<string>() }
+            };
+
+            foreach (var evt in AllKnownEvents)
+            {
+                if (DefDatabase<IncidentDef>.GetNamedSilentFail(evt) == null) continue;
+                buckets[BucketOf(evt)].Add(evt);
+            }
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var kv in buckets)
+            {
+                kv.Value.Sort(StringComparer.Ordinal);
+                sb.Append(kv.Key).Append(" (").Append(kv.Value.Count).Append("): ")
+                  .Append(string.Join(", ", kv.Value)).Append(Environment.NewLine);
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// The single source of truth for which bucket a defName lands in. Precedence matters:
+        /// a seed name can sit in more than one set, and Claude must see it in exactly one list.
+        /// </summary>
+        private static string BucketOf(string evt)
+        {
+            if (WeatherEvents.Contains(evt)) return "weather";
+            if (ThreatEventSet.Contains(evt)) return "threats";
+            if (PositiveEvents.Contains(evt)) return "positive";
+            if (DiseaseEvents.Contains(evt)) return "disease";
+            return "other";
+        }
+
+        /// <summary>
+        /// defName -> label for the subset of <paramref name="available"/> that came from
+        /// runtime discovery rather than the curated seed. Sent to Claude so an unfamiliar
+        /// mod defName is a choice rather than a coin flip.
+        /// </summary>
+        public static Dictionary<string, string> GetEventGlossary(List<string> available)
+        {
+            var glossary = new Dictionary<string, string>();
+            if (available == null) return glossary;
+
+            foreach (var evt in available)
+            {
+                if (DiscoveredLabels.TryGetValue(evt, out string label))
+                    glossary[evt] = label;
+            }
+            return glossary;
         }
 
         // ========== Delegate to GameComponent ==========
 
         public static void RecordEvent(string type, string outcome, string requestedType, string source)
         {
+            EnsureDiscovered();
+
             var comp = StorytellerGameComponent.Get();
             comp?.RecordEvent(type, outcome, requestedType, source);
 
@@ -105,16 +345,29 @@ namespace ClaudeStoryteller
 
         public static bool IsWeatherEvent(string eventType)
         {
+            EnsureDiscovered();
             return WeatherEvents.Contains(eventType);
         }
 
         public static bool IsThreatEvent(string eventType)
         {
+            EnsureDiscovered();
             return ThreatEventSet.Contains(eventType);
+        }
+
+        /// <summary>
+        /// True only for mod-added ThreatBig incidents. The curated vanilla major-threat
+        /// list still lives in ClaudeStorytellerComp; this supplements it.
+        /// </summary>
+        public static bool IsMajorThreatEvent(string eventType)
+        {
+            EnsureDiscovered();
+            return MajorThreatEventSet.Contains(eventType);
         }
 
         public static bool IsDiseaseEvent(string eventType)
         {
+            EnsureDiscovered();
             return DiseaseEvents.Contains(eventType);
         }
 
@@ -153,6 +406,8 @@ namespace ClaudeStoryteller
 
         public static List<string> GetAvailableEvents(Map map)
         {
+            EnsureDiscovered();
+
             var available = new List<string>();
 
             var eventsToCheck = new List<string>(AllKnownEvents);
@@ -164,7 +419,11 @@ namespace ClaudeStoryteller
 
                 try
                 {
-                    var parms = StorytellerUtility.DefaultParmsNow(def.category, map);
+                    // Caravan-only and Map_Dummy defs resolve to null and are never offered.
+                    var target = ResolveTarget(def, map);
+                    if (target == null) continue;
+
+                    var parms = StorytellerUtility.DefaultParmsNow(def.category, target);
                     if (def.Worker.CanFireNow(parms))
                     {
                         available.Add(eventName);
@@ -177,6 +436,34 @@ namespace ClaudeStoryteller
             }
 
             return available;
+        }
+
+        /// <summary>
+        /// The incident target a def can legally fire against from the player's map pass: the
+        /// map itself when its tags allow it, otherwise the World for world-scale incidents
+        /// (Eclipse, SolarFlare, Aurora, GiveQuest_Random, mod world conditions), otherwise null.
+        /// IncidentWorker.CanFireNow fails def.TargetAllowed(target) before anything else, so
+        /// checking a World-only def against a Map — the pre-2026-09-07 behaviour — silently hid
+        /// 46 incidents in this modlist. Used by both GetAvailableEvents and TryConvertToIncident
+        /// so what is offered and what is fired agree.
+        /// </summary>
+        public static IIncidentTarget ResolveTarget(IncidentDef def, Map map)
+        {
+            if (def == null) return null;
+
+            try
+            {
+                if (map != null && def.TargetAllowed(map)) return map;
+
+                var world = Find.World;
+                if (world != null && def.TargetAllowed(world)) return world;
+            }
+            catch
+            {
+                // A def with malformed targetTags is unusable; treat as no target.
+            }
+
+            return null;
         }
 
         public static Dictionary<string, List<string>> GetAvailableEventsByCategory(Map map)
@@ -192,18 +479,7 @@ namespace ClaudeStoryteller
             };
 
             foreach (var evt in available)
-            {
-                if (WeatherEvents.Contains(evt))
-                    categorized["weather"].Add(evt);
-                else if (ThreatEventSet.Contains(evt))
-                    categorized["threats"].Add(evt);
-                else if (PositiveEvents.Contains(evt))
-                    categorized["positive"].Add(evt);
-                else if (DiseaseEvents.Contains(evt))
-                    categorized["disease"].Add(evt);
-                else
-                    categorized["other"].Add(evt);
-            }
+                categorized[BucketOf(evt)].Add(evt);
 
             // Remove diseases entirely if cooldown hasn't elapsed
             if (!CanFireDisease())
@@ -491,6 +767,17 @@ namespace ClaudeStoryteller
 
             var availableEvents = GetAvailableEventsByCategory(map);
 
+            // Per-call count, so the offered list is checkable without opening STATE_SENT.
+            int realPool = AllKnownEvents.Count(e => DefDatabase<IncidentDef>.GetNamedSilentFail(e) != null);
+            var offeredNames = availableEvents.SelectMany(kv => kv.Value).ToList();
+            int worldTargeted = offeredNames.Count(e =>
+                !(ResolveTarget(DefDatabase<IncidentDef>.GetNamedSilentFail(e), map) is Map));
+            ClaudeLogger.LogEntry("AVAILABLE_EVENTS",
+                string.Join(", ", availableEvents.Select(kv => kv.Key + " " + kv.Value.Count)) +
+                " = " + offeredNames.Count + " of " + realPool +
+                " pool events passed CanFireNow (" + worldTargeted + " world-targeted)" +
+                (CanFireDisease() ? "" : " (disease bucket cleared: cooldown)") + ".");
+
             var state = new ColonyState
             {
                 RequestId = Guid.NewGuid().ToString("N").Substring(0, 8),
@@ -505,6 +792,8 @@ namespace ClaudeStoryteller
                 CurrentQueue = CollectQueueContext(),
                 Difficulty = CollectDifficulty(),
                 AvailableEvents = availableEvents,
+                EventGlossary = GetEventGlossary(
+                    availableEvents.SelectMany(kv => kv.Value).ToList()),
                 Density = CollectDensity(comp),
                 LastPosture = comp?.LastPosture ?? "none — first call",
                 HighlightedEvents = GenerateHighlightedEvents(availableEvents),

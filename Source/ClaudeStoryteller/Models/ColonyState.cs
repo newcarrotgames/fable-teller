@@ -16,6 +16,8 @@ namespace ClaudeStoryteller.Models
         public ArcHistorySummary ArcHistory { get; set; }
         public DifficultyInfo Difficulty { get; set; }
         public Dictionary<string, List<string>> AvailableEvents { get; set; }
+        // defName -> label, for mod-added events only. Empty on a vanilla-only modlist.
+        public Dictionary<string, string> EventGlossary { get; set; }
         public EventDensity Density { get; set; }
         public string LastPosture { get; set; }
         public List<string> HighlightedEvents { get; set; }

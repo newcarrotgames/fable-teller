@@ -28,11 +28,25 @@ namespace ClaudeStoryteller
         public static void LogEntry(string category, string message)
         {
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-            int gameTick = Find.TickManager?.TicksGame ?? 0;
-            int gameDay = gameTick / GenDate.TicksPerDay;
-            float gameHour = (gameTick % GenDate.TicksPerDay) / (float)GenDate.TicksPerHour;
 
-            string entry = $"[{timestamp}] [Day {gameDay} Hour {gameHour:F1}] [{category}]\n{message}\n{"".PadRight(80, '-')}\n";
+            // Find.TickManager is Current.Game.tickManager with no null check inside, so the
+            // getter itself throws before a game exists (static constructors on startup, main
+            // menu). The ?. only guards the result, not the getter. A logger that throws from
+            // a [StaticConstructorOnStartup] type poisons that type for the whole session.
+            string when = "startup";
+            try
+            {
+                if (Current.Game != null && Find.TickManager != null)
+                {
+                    int gameTick = Find.TickManager.TicksGame;
+                    int gameDay = gameTick / GenDate.TicksPerDay;
+                    float gameHour = (gameTick % GenDate.TicksPerDay) / (float)GenDate.TicksPerHour;
+                    when = $"Day {gameDay} Hour {gameHour:F1}";
+                }
+            }
+            catch { }
+
+            string entry = $"[{timestamp}] [{when}] [{category}]\n{message}\n{"".PadRight(80, '-')}\n";
 
             Log.Message($"[ClaudeStoryteller] [{category}] {message.Split('\n')[0]}");
 
