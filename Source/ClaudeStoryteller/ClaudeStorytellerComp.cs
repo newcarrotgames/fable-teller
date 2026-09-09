@@ -676,6 +676,7 @@ namespace ClaudeStoryteller
                         {
                             EventType = scattered.Type,
                             Subtype = scattered.Subtype,
+                            ArrivalMode = scattered.ArrivalMode,
                             Faction = scattered.Faction,
                             Intensity = scattered.Intensity,
                             SourceCycle = "scattered",
@@ -686,11 +687,23 @@ namespace ClaudeStoryteller
                     }
                     else
                     {
-                        // Fire immediately
-                        var incident = ConvertToIncidentWithFallback(
-                            scattered.Type, scattered.Intensity, scattered.Faction,
-                            scattered.Subtype, target, "scattered", out _
-                        );
+                        // Fire immediately — routed through the same QueuedEvent +
+                        // ConvertQueuedToIncidentWithFallback path as the delayed branch above and
+                        // every arc beat, so ArrivalMode threads through for free. This also fixes
+                        // a pre-existing bug: only the queued path staged flavor, so an immediate
+                        // (delay 0) scattered event's flavor was silently dropped before this.
+                        var immediateQueued = new QueuedEvent
+                        {
+                            EventType = scattered.Type,
+                            Subtype = scattered.Subtype,
+                            ArrivalMode = scattered.ArrivalMode,
+                            Faction = scattered.Faction,
+                            Intensity = scattered.Intensity,
+                            SourceCycle = "scattered",
+                            Note = scattered.Note,
+                            Flavor = scattered.Flavor
+                        };
+                        var incident = ConvertQueuedToIncidentWithFallback(immediateQueued, target, out _);
                         if (incident != null) yield return incident;
                     }
                 }
@@ -943,6 +956,7 @@ namespace ClaudeStoryteller
                 {
                     EventType = arcEvent.Type,
                     Subtype = arcEvent.Subtype,
+                    ArrivalMode = arcEvent.ArrivalMode,
                     Faction = arcEvent.Faction,
                     Intensity = arcEvent.Intensity,
                     SourceCycle = "narrative",
@@ -1221,6 +1235,7 @@ namespace ClaudeStoryteller
                 queued.Intensity,
                 queued.Faction,
                 queued.Subtype,
+                queued.ArrivalMode,
                 target,
                 queued.SourceCycle,
                 out resolvedType
@@ -1263,10 +1278,10 @@ namespace ClaudeStoryteller
             return incident;
         }
 
-        private FiringIncident ConvertToIncidentWithFallback(string type, float intensity, string faction, string subtype, IIncidentTarget target, string source, out string resolvedType)
+        private FiringIncident ConvertToIncidentWithFallback(string type, float intensity, string faction, string subtype, string arrivalMode, IIncidentTarget target, string source, out string resolvedType)
         {
             // Try the requested event first
-            var incident = TryConvertToIncident(type, intensity, faction, subtype, target);
+            var incident = TryConvertToIncident(type, intensity, faction, subtype, arrivalMode, target);
             if (incident != null)
             {
                 resolvedType = ResolveEventName(type);
@@ -1306,7 +1321,7 @@ namespace ClaudeStoryteller
 
             foreach (var fallbackType in shuffled)
             {
-                incident = TryConvertToIncident(fallbackType, 1.0f, null, null, target);
+                incident = TryConvertToIncident(fallbackType, 1.0f, null, null, null, target);
                 if (incident != null)
                 {
                     resolvedType = fallbackType;
@@ -1321,7 +1336,7 @@ namespace ClaudeStoryteller
             return null;
         }
 
-        private FiringIncident TryConvertToIncident(string type, float intensity, string faction, string subtype, IIncidentTarget target)
+        private FiringIncident TryConvertToIncident(string type, float intensity, string faction, string subtype, string arrivalMode, IIncidentTarget target)
         {
             var diff = GetDifficulty();
             string resolvedType = ResolveEventName(type);
@@ -1348,6 +1363,22 @@ namespace ClaudeStoryteller
             float clampedIntensity = Math.Max(diff.MinIntensity, Math.Min(intensity, diff.MaxIntensity));
 
             IncidentDef incidentDef = DefDatabase<IncidentDef>.GetNamedSilentFail(resolvedType);
+
+            // Not a known IncidentDef — try it as a named QuestScriptDef instead. Fires through
+            // the ordinary GiveQuest_Random incident with a specific script pre-selected, so
+            // everything downstream (target resolution, points, CanFireNow, letter merge, arc
+            // records) works unchanged. Quest script names are naturally non-threat/non-disease
+            // for every gate above, so nothing needs to special-case them earlier in this method.
+            QuestScriptDef questScript = null;
+            if (incidentDef == null)
+            {
+                questScript = DefDatabase<QuestScriptDef>.GetNamedSilentFail(resolvedType);
+                if (questScript != null)
+                {
+                    incidentDef = DefDatabase<IncidentDef>.GetNamedSilentFail("GiveQuest_Random");
+                    ClaudeLogger.LogEntry("QUEST_SCRIPT", $"Named quest script requested: {resolvedType}");
+                }
+            }
             if (incidentDef == null)
             {
                 ClaudeLogger.LogEventSkipped($"Unknown incident def: {type} (resolved: {resolvedType})");
@@ -1368,11 +1399,27 @@ namespace ClaudeStoryteller
             var parms = StorytellerUtility.DefaultParmsNow(incidentDef.category, fireTarget);
             parms.points *= clampedIntensity;
 
+            if (questScript != null)
+                parms.questScriptDef = questScript;
+
             if (!string.IsNullOrEmpty(faction))
             {
                 Faction factionObj = ResolveFaction(faction);
                 if (factionObj != null)
-                    parms.faction = factionObj;
+                {
+                    // A threat can only be attributed to a faction actually hostile to the
+                    // player — otherwise a friendly/neutral override would silently attach a
+                    // raid to an ally. Non-threat overrides (quest asker, arc framing) are fine.
+                    if (IsThreat(resolvedType) && !factionObj.HostileTo(Faction.OfPlayer))
+                    {
+                        ClaudeLogger.LogEntry("FACTION_NOT_HOSTILE",
+                            $"Ignoring faction override '{faction}' -> {factionObj.Name} for threat {type}: not hostile to player.");
+                    }
+                    else
+                    {
+                        parms.faction = factionObj;
+                    }
+                }
             }
 
             if (!string.IsNullOrEmpty(subtype) && resolvedType.Contains("Raid"))
@@ -1380,6 +1427,37 @@ namespace ClaudeStoryteller
                 var strategy = GetRaidStrategy(subtype);
                 if (strategy != null)
                     parms.raidStrategy = strategy;
+            }
+
+            if (resolvedType.Contains("Raid"))
+            {
+                PawnsArrivalModeDef mode = GetArrivalMode(arrivalMode);
+
+                // Legacy nicety: "drop_pods" used to be (wrongly) mapped to a raid STRATEGY, so
+                // it silently walked in. It is a real strategy now (see GetRaidStrategy) — give
+                // it an actual drop when the beat did not also specify its own arrival_mode.
+                if (mode == null && string.Equals(subtype, "drop_pods", StringComparison.OrdinalIgnoreCase))
+                    mode = DefDatabase<PawnsArrivalModeDef>.GetNamedSilentFail("CenterDrop");
+
+                if (mode != null)
+                {
+                    // Vanilla's ResolveRaidStrategy filters candidate strategies to ones
+                    // compatible with a pre-set raidArrivalMode; going the other way, an
+                    // incompatible pairing has to be caught here or the raid simply never
+                    // constructs pawns for the mode it was told to use. Skip the override and
+                    // let vanilla's own ResolveRaidArriveMode pick instead.
+                    if (parms.raidStrategy != null && parms.raidStrategy.arriveModes != null
+                        && !parms.raidStrategy.arriveModes.Contains(mode))
+                    {
+                        ClaudeLogger.LogEntry("ARRIVAL_INCOMPATIBLE",
+                            $"arrival_mode '{arrivalMode ?? subtype}' -> {mode.defName} incompatible with raid strategy " +
+                            $"{parms.raidStrategy.defName}; letting vanilla resolve arrival instead.");
+                    }
+                    else
+                    {
+                        parms.raidArrivalMode = mode;
+                    }
+                }
             }
 
             // Check if the event can actually fire
@@ -1441,12 +1519,41 @@ namespace ClaudeStoryteller
                     return DefDatabase<RaidStrategyDef>.GetNamedSilentFail("ImmediateAttackSappers");
                 case "siege":
                     return DefDatabase<RaidStrategyDef>.GetNamedSilentFail("Siege");
+                case "breach":
+                    return DefDatabase<RaidStrategyDef>.GetNamedSilentFail("ImmediateAttackBreaching");
                 case "drop_pods":
-                    return DefDatabase<RaidStrategyDef>.GetNamedSilentFail("ImmediateAttackSmart");
+                    // Was "ImmediateAttackSmart" — a STRATEGY, not an arrival mode, so asking for
+                    // drop pods actually got smart walk-ins. Plain ImmediateAttack now; the drop
+                    // itself is applied as an arrival_mode override in TryConvertToIncident.
+                    return DefDatabase<RaidStrategyDef>.GetNamedSilentFail("ImmediateAttack");
                 case "assault":
                 default:
                     return DefDatabase<RaidStrategyDef>.GetNamedSilentFail("ImmediateAttack");
             }
+        }
+
+        /// <summary>
+        /// Maps the five friendly arrival_mode names to their PawnsArrivalModeDef, falling back
+        /// to treating the input as an exact defName (mirrors GetRaidStrategy's shape). Returns
+        /// null for an empty/unrecognized value rather than throwing — callers treat null as
+        /// "no override, let vanilla decide".
+        /// </summary>
+        private static PawnsArrivalModeDef GetArrivalMode(string arrivalMode)
+        {
+            if (string.IsNullOrEmpty(arrivalMode)) return null;
+
+            string defName;
+            switch (arrivalMode.ToLower())
+            {
+                case "walk_in": defName = "EdgeWalkIn"; break;
+                case "walk_in_groups": defName = "EdgeWalkInGroups"; break;
+                case "drop_edge": defName = "EdgeDrop"; break;
+                case "drop_center": defName = "CenterDrop"; break;
+                case "drop_scatter": defName = "RandomDrop"; break;
+                default: defName = arrivalMode; break; // accept an exact defName as a fallback
+            }
+
+            return DefDatabase<PawnsArrivalModeDef>.GetNamedSilentFail(defName);
         }
     }
 }

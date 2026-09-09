@@ -11,6 +11,10 @@ namespace ClaudeStoryteller.Models
         public RecentHistory RecentHistory { get; set; }
         public Dictionary<string, int> Cooldowns { get; set; }
         public List<string> AvailableFactions { get; set; }
+        // name -> "hostile, goodwill -100, tribal" style summary for every faction in
+        // AvailableFactions (except the synthetic "Mechanoid" entry, whose real faction is Hidden
+        // and has no name to key on).
+        public Dictionary<string, string> FactionDetails { get; set; }
         public List<string> DoNotRepeat { get; set; }
         public QueueContext CurrentQueue { get; set; }
         public ArcHistorySummary ArcHistory { get; set; }
@@ -33,6 +37,10 @@ namespace ClaudeStoryteller.Models
         public List<string> ColonistNames { get; set; }
         // "joined: X; died: Y; downed: Z" since the previous unified call, or null when nothing changed.
         public string CastChangesSinceLastCall { get; set; }
+
+        // defName -> short mechanical gloss, for every root-selectable QuestScriptDef that
+        // CanRun right now. Use one as a beat/scattered event's "type" like an incident defName.
+        public Dictionary<string, string> AvailableQuests { get; set; }
     }
     public class ColonyInfo
     {

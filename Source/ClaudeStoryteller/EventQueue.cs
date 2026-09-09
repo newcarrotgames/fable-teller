@@ -26,6 +26,7 @@ namespace ClaudeStoryteller
         public string Expect { get; set; }       // debug log only
         public string FireWhen { get; set; }      // "scheduled" | "after_calm"
         public string OnBadJson { get; set; }     // raw braced JSON of the optional on_bad block
+        public string ArrivalMode { get; set; }   // "walk_in" | "walk_in_groups" | "drop_edge" | "drop_center" | "drop_scatter" | null
 
         public QueuedEvent()
         {
@@ -39,6 +40,7 @@ namespace ClaudeStoryteller
             string note = Note, flavor = Flavor;
             string link = Link, linkReason = LinkReason, circleStep = CircleStep;
             string expect = Expect, fireWhen = FireWhen, onBadJson = OnBadJson;
+            string arrivalMode = ArrivalMode;
             float intensity = Intensity;
             int fireAtTick = FireAtTick;
 
@@ -58,6 +60,7 @@ namespace ClaudeStoryteller
             Scribe_Values.Look(ref expect, "expect");
             Scribe_Values.Look(ref fireWhen, "fireWhen");
             Scribe_Values.Look(ref onBadJson, "onBadJson");
+            Scribe_Values.Look(ref arrivalMode, "arrivalMode");
 
             EventType = eventType; Category = category; Subtype = subtype;
             Faction = faction; SourceCycle = sourceCycle; ArcName = arcName;
@@ -65,6 +68,7 @@ namespace ClaudeStoryteller
             Intensity = intensity; FireAtTick = fireAtTick;
             Link = link; LinkReason = linkReason; CircleStep = circleStep;
             Expect = expect; FireWhen = fireWhen; OnBadJson = onBadJson;
+            ArrivalMode = arrivalMode;
         }
     }
 

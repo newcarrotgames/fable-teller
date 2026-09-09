@@ -766,6 +766,7 @@ namespace ClaudeStoryteller
             var days = GenDate.DaysPassed;
 
             var availableEvents = GetAvailableEventsByCategory(map);
+            var availableQuests = GetAvailableQuests(map);
 
             // Per-call count, so the offered list is checkable without opening STATE_SENT.
             int realPool = AllKnownEvents.Count(e => DefDatabase<IncidentDef>.GetNamedSilentFail(e) != null);
@@ -775,7 +776,11 @@ namespace ClaudeStoryteller
             ClaudeLogger.LogEntry("AVAILABLE_EVENTS",
                 string.Join(", ", availableEvents.Select(kv => kv.Key + " " + kv.Value.Count)) +
                 " = " + offeredNames.Count + " of " + realPool +
-                " pool events passed CanFireNow (" + worldTargeted + " world-targeted)" +
+                " pool events passed CanFireNow (" + worldTargeted + " world-targeted); " +
+                availableQuests.Count + " quest(s) offered" +
+                (availableQuests.Count > 0
+                    ? " [" + string.Join(", ", availableQuests.Keys.OrderBy(k => k, StringComparer.Ordinal)) + "]"
+                    : "") +
                 (CanFireDisease() ? "" : " (disease bucket cleared: cooldown)") + ".");
 
             var state = new ColonyState
@@ -788,6 +793,7 @@ namespace ClaudeStoryteller
                 RecentHistory = CollectRecentHistory(comp, map),
                 Cooldowns = null,
                 AvailableFactions = CollectFactions(),
+                FactionDetails = CollectFactionDetails(),
                 DoNotRepeat = comp?.GetRecentEventTypes(3) ?? new List<string>(),
                 CurrentQueue = CollectQueueContext(),
                 Difficulty = CollectDifficulty(),
@@ -806,7 +812,8 @@ namespace ClaudeStoryteller
                 RecurringFactions = comp?.GetRecurringFactions() ?? new List<string>(),
                 ColonistNames = colonists.OrderBy(p => p.thingIDNumber)
                     .Select(p => p.Name?.ToStringShort ?? p.LabelShortCap).ToList(),
-                CastChangesSinceLastCall = comp?.GetCastChangesSinceLastCall()
+                CastChangesSinceLastCall = comp?.GetCastChangesSinceLastCall(),
+                AvailableQuests = availableQuests
             };
 
             // One call = one increment, so calls_since_beat_authored actually counts calls.
@@ -1087,26 +1094,155 @@ namespace ClaudeStoryteller
             return medCount < 5 ? "none" : medCount < 15 ? "low" : medCount < 40 ? "adequate" : "abundant";
         }
 
+        /// <summary>
+        /// Real Faction.Names for every non-hidden, non-defeated, non-player, non-temporary
+        /// faction — hostile AND friendly, no more Tribal/Pirate collapse. Mechanoid factions
+        /// are Hidden (ResolveFaction's exact-name match skips Hidden, same as here) and so
+        /// never contribute a usable name; the literal "Mechanoid" is added back as a synthetic
+        /// entry whenever a live hostile mechanoid faction exists, so ResolveFaction's kind
+        /// fallback still has something to match.
+        /// </summary>
         private static List<string> CollectFactions()
         {
             var factions = new List<string>();
 
             foreach (var faction in Find.FactionManager.AllFactions)
             {
-                if (faction.HostileTo(Faction.OfPlayer) && !faction.defeated)
-                {
-                    if (faction.def.techLevel <= TechLevel.Neolithic)
-                        factions.Add("Tribal");
-                    else if (faction.def == FactionDefOf.Mechanoid)
-                        factions.Add("Mechanoid");
-                    else if (faction.def == FactionDefOf.Pirate)
-                        factions.Add("Pirate");
-                    else
-                        factions.Add(faction.Name);
-                }
+                if (faction.Hidden || faction.defeated || faction == Faction.OfPlayer || faction.temporary) continue;
+                if (string.IsNullOrEmpty(faction.Name)) continue;
+                factions.Add(faction.Name);
             }
 
+            bool hasHostileMechanoid = Find.FactionManager.AllFactions.Any(f =>
+                f.def == FactionDefOf.Mechanoid && !f.defeated && f.HostileTo(Faction.OfPlayer));
+            if (hasHostileMechanoid) factions.Add("Mechanoid");
+
             return factions.Distinct().ToList();
+        }
+
+        /// <summary>
+        /// name -> "hostile, goodwill -100, tribal" style summary for every faction CollectFactions
+        /// would name (same filter; the synthetic "Mechanoid" entry is skipped here since it has
+        /// no real Faction to read goodwill from). Lets Claude reason about allies/neutrals, not
+        /// just who to send a raid from.
+        /// </summary>
+        private static Dictionary<string, string> CollectFactionDetails()
+        {
+            var details = new Dictionary<string, string>();
+
+            foreach (var faction in Find.FactionManager.AllFactions)
+            {
+                if (faction.Hidden || faction.defeated || faction == Faction.OfPlayer || faction.temporary) continue;
+                if (string.IsNullOrEmpty(faction.Name)) continue;
+
+                string relation = faction.HostileTo(Faction.OfPlayer) ? "hostile"
+                    : faction.PlayerRelationKind == FactionRelationKind.Ally ? "ally"
+                    : "neutral";
+                string kind = faction.def == FactionDefOf.Pirate ? "pirate"
+                    : faction.def.techLevel <= TechLevel.Neolithic ? "tribal"
+                    : "outlander";
+
+                details[faction.Name] = relation + ", goodwill " + faction.PlayerGoodwill + ", " + kind;
+            }
+
+            return details;
+        }
+
+        // ========== Named quests (item 4 of the roadmap) ==========
+        // Hand-written glosses for the known vanilla/DLC root scripts (RESEARCH_EVENT_SOURCES.md
+        // "Tier 2"). Payload-side text only — Claude reads these, the player never does — so they
+        // stay short and mechanical rather than atmospheric. Unknown/mod scripts fall back to a
+        // prettified defName rather than being silently dropped.
+        private static readonly Dictionary<string, string> QuestGlossary = new Dictionary<string, string>
+        {
+            // Core
+            { "OpportunitySite_BanditCamp", "map site with a bandit camp to raid or bypass" },
+            { "OpportunitySite_DownedRefugee", "map site with a downed refugee to rescue" },
+            { "OpportunitySite_ItemStash", "map site with an item stash to claim" },
+            { "OpportunitySite_PeaceTalks", "map site to negotiate peace with a faction" },
+            { "OpportunitySite_PrisonerWillingToJoin", "map site with a prisoner willing to join" },
+            { "ThreatReward_Raid_Joiner", "accept a raid now in exchange for a joiner" },
+            { "TradeRequest", "a faction requests specific goods for payment" },
+            // Royalty
+            { "Hospitality_Joiners", "guests staying who may join the colony after" },
+            { "Hospitality_Refugee", "a refugee seeking shelter, may join after" },
+            { "Hospitality_Prisoners", "prisoners delivered for the colony to host or free" },
+            { "Hospitality_Animals", "animals delivered for the colony to host or tame" },
+            { "Mission_BanditCamp", "a bandit camp mission with a chosen reward" },
+            { "PawnLend", "a faction asks to borrow a colonist temporarily" },
+            { "ShuttleCrash_Rescue", "a crashed shuttle with survivors to rescue" },
+            // Ideology
+            { "OpportunitySite_AncientComplex", "map site with an ancient complex to explore" },
+            // Biotech
+            { "PollutionDump", "a faction asks to dump pollution near the colony" },
+            { "SanguophageMeetingHost", "a sanguophage asks to meet, possibly to join" },
+            { "SanguophageShip", "a sanguophage ship requests contact or trade" },
+            // Odyssey
+            { "GravshipWreckage", "a wrecked gravship with salvage to recover" },
+            { "OpportunitySite_Asteroid", "map site on an asteroid with salvage" },
+            { "OpportunitySite_Satellite", "map site on a satellite with salvage" },
+            { "OpportunitySite_OrbitalItemStash", "orbital site with an item stash to claim" },
+            { "OpportunitySite_OrbitalWreck", "orbital wreck site with salvage to recover" },
+            { "OrbitalFugitive", "a fugitive in orbit seeking rescue or capture" },
+            { "SurveySite", "a site to survey for resources or hazards" },
+            { "OpportunitySite_AncientMercenaries", "map site with ancient mercenaries to recruit or fight" },
+            { "OpportunitySite_AbandonedPlatform", "map site on an abandoned platform to explore" }
+        };
+
+        private static string GlossForQuest(string defName)
+        {
+            if (QuestGlossary.TryGetValue(defName, out string gloss)) return gloss;
+            return PrettifyDefName(defName).ToLowerInvariant();
+        }
+
+        /// <summary>Splits "Some_DefName" / "SomeDefName" into "Some Def Name" for the fallback gloss.</summary>
+        private static string PrettifyDefName(string defName)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < defName.Length; i++)
+            {
+                char c = defName[i];
+                if (c == '_') { sb.Append(' '); continue; }
+                if (i > 0 && char.IsUpper(c) && char.IsLower(defName[i - 1])) sb.Append(' ');
+                sb.Append(c);
+            }
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// defName -> gloss for every root-selectable (rootSelectionWeight > 0, i.e.
+        /// IsRootRandomSelected) QuestScriptDef that CanRun right now. Called per storyteller
+        /// call, NEVER from the static ctor: CanRun needs a live game (Find.World, storyteller
+        /// threat points), which does not exist at startup. Util_* subroutines and fixed
+        /// endgame/intro scripts are excluded automatically — they are not root-random-selected.
+        /// </summary>
+        public static Dictionary<string, string> GetAvailableQuests(Map map)
+        {
+            var quests = new Dictionary<string, string>();
+            if (map == null || Find.World == null) return quests;
+
+            float points;
+            try { points = StorytellerUtility.DefaultThreatPointsNow(Find.World); }
+            catch { return quests; }
+
+            foreach (var script in DefDatabase<QuestScriptDef>.AllDefsListForReading)
+            {
+                if (script == null || !script.IsRootRandomSelected) continue;
+
+                bool canRun;
+                try { canRun = script.CanRun(points, Find.World); }
+                catch (Exception e)
+                {
+                    ClaudeLogger.LogEntry("QUEST_SCRIPT_SKIPPED",
+                        script.defName + " CanRun threw " + e.GetType().Name);
+                    continue;
+                }
+                if (!canRun) continue;
+
+                quests[script.defName] = GlossForQuest(script.defName);
+            }
+
+            return quests;
         }
     }
 }

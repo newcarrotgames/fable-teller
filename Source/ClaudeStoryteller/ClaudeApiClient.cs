@@ -244,8 +244,14 @@ You receive event_glossary — defName to label, for mod-added events only. A de
 Mod events are ordinary choices, not exotic ones: prefer them when the label fits the beat you want, and do not assume behaviour the label does not state.
 Whatever the source, echo the defName back exactly as given. Never return a label.
 
-RAID SUBTYPES (if RaidEnemy available): ""assault"", ""sapper"", ""siege"", ""drop_pods""
-FACTIONS: ""Pirate"", ""Tribal"", ""Mechanoid"" — use what is in available_factions. Rotate factions. An arc may pin a faction with arc.arc_faction (an exact name from available_factions); later beats can reuse it via faction: ""same_as_opening"".
+RAID SUBTYPES (if RaidEnemy available) — subtype picks the raid STRATEGY, how they fight: ""assault"", ""sapper"", ""siege"", ""breach"", ""drop_pods"" (a legacy alias for an immediate-attack strategy that also defaults arrival to a center drop unless arrival_mode says otherwise).
+ARRIVAL MODE — arrival_mode picks HOW THEY ARRIVE, independent of subtype: ""walk_in"", ""walk_in_groups"", ""drop_edge"", ""drop_center"", ""drop_scatter"", or null to let the game decide. Raids only. Some strategies restrict arrival: siege allows only walk_in/drop_edge; sapper allows only walk_in/walk_in_groups/drop_edge; breach allows only walk_in. An incompatible pairing is skipped in code (logged, not an error) and the raid still fires with the strategy's own default arrival.
+FACTIONS: available_factions lists every known faction's real name — hostile and friendly — plus the literal ""Mechanoid"" when a hostile mechanoid faction exists (its real faction is hidden). faction_details maps each name to relation/goodwill/kind, e.g. ""hostile, goodwill -100, tribal"" or ""ally, goodwill 85, outlander"". Only a HOSTILE faction can be a raid's attacker — naming a friendly or neutral faction there is silently ignored and the raid fires without that override. Friendly and neutral factions are still useful: name them in flavor, pin an arc to one for a grudge or alliance story, frame a quest around one. Rotate factions. An arc may pin a faction with arc.arc_faction (an exact name from available_factions); later beats can reuse it via faction: ""same_as_opening"".
+
+==============================
+AVAILABLE QUESTS
+==============================
+available_quests maps quest script defNames to a short description of what firing them does. Use one as a beat or scattered event's ""type"" exactly like an incident defName from available_events. Firing one produces a quest OFFER the player may accept or decline, not a guaranteed outcome — do not assume it succeeds, and do not treat it as a raid or a reward you control the shape of. Good material for ""search""/""find"" circle steps and for social or diplomatic beats. Quests are never removed by excluded_this_call.
 
 ==============================
 PLAYER-FACING TEXT vs. YOUR REASONING
@@ -301,6 +307,7 @@ Respond ONLY with valid JSON:
         ""delay_hours"": <hours from now>,
         ""type"": ""<exact defName from available_events>"" or ""none"" (letter-only beat, at most one per arc),
         ""subtype"": ""<or null>"",
+        ""arrival_mode"": ""walk_in"" or ""walk_in_groups"" or ""drop_edge"" or ""drop_center"" or ""drop_scatter"" or null (raids only),
         ""faction"": ""<exact name from available_factions>"" or ""same_as_opening"" or null,
         ""intensity"": <float — use your judgment>,
         ""circle_step"": ""need"" or ""search"" or ""find"" or ""take"" or ""return"" or ""change"",
@@ -322,6 +329,7 @@ Respond ONLY with valid JSON:
       ""delay_hours"": <hours from now — can overlap with arc events>,
       ""type"": ""<exact defName from available_events>"",
       ""subtype"": ""<or null>"",
+      ""arrival_mode"": ""walk_in"" or ""walk_in_groups"" or ""drop_edge"" or ""drop_center"" or ""drop_scatter"" or null (raids only),
       ""faction"": ""<or null>"",
       ""intensity"": <float>,
       ""note"": ""<DEBUG LOG ONLY: why this event at this time>"",
@@ -572,6 +580,7 @@ Respond ONLY with valid JSON:
                 { "delay_hours", SchemaNumber() },
                 { "type", SchemaString(false) },
                 { "subtype", SchemaString(true) },
+                { "arrival_mode", SchemaString(true) },
                 { "faction", SchemaString(true) },
                 { "intensity", SchemaNumber() },
                 { "circle_step", SchemaString(false) },
@@ -607,6 +616,7 @@ Respond ONLY with valid JSON:
                 { "delay_hours", SchemaNumber() },
                 { "type", SchemaString(false) },
                 { "subtype", SchemaString(true) },
+                { "arrival_mode", SchemaString(true) },
                 { "faction", SchemaString(true) },
                 { "intensity", SchemaNumber() },
                 { "note", SchemaString(true) },
@@ -799,6 +809,7 @@ Respond ONLY with valid JSON:
                     DelayHours = ExtractFloatValue(eventJson, "delay_hours", 0),
                     Type = ExtractStringValue(eventJson, "type"),
                     Subtype = ExtractStringValue(eventJson, "subtype"),
+                    ArrivalMode = ExtractStringValue(eventJson, "arrival_mode"),
                     Faction = ExtractStringValue(eventJson, "faction"),
                     Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                     Animal = ExtractStringValue(eventJson, "animal"),
@@ -920,6 +931,7 @@ Respond ONLY with valid JSON:
                     DelayHours = ExtractFloatValue(eventJson, "delay_hours", 0),
                     Type = ExtractStringValue(eventJson, "type"),
                     Subtype = ExtractStringValue(eventJson, "subtype"),
+                    ArrivalMode = ExtractStringValue(eventJson, "arrival_mode"),
                     Faction = ExtractStringValue(eventJson, "faction"),
                     Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                     Animal = ExtractStringValue(eventJson, "animal"),
