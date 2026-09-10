@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Defs>
+
+  <!-- Letters carrying Claude's narration. Same urgency profile as NeutralEvent
+       (no bounce, no pause, standard sound) - only the color differs, so the
+       storyteller's moments stand out from routine grey without crying wolf. -->
+  <LetterDef>
+    <defName>ClaudeStoryteller_Narrative</defName>
+    <color>(188, 152, 220)</color>
+    <flashColor>(198, 160, 235)</flashColor>
+    <flashInterval>90</flashInterval>
+    <arriveSound>LetterArrive</arriveSound>
+  </LetterDef>
+
+</Defs>

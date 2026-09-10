@@ -45,6 +45,25 @@ namespace ClaudeStoryteller
 
         public static bool PatchActive { get; private set; }
 
+        private static LetterDef narrativeLetter;
+        private static bool narrativeLetterResolved;
+
+        /// <summary>The mod's violet letter color (Defs\LetterDefs\ClaudeLetters.xml).
+        /// Resolved lazily at first letter, never from the static ctor; null if the
+        /// XML failed to load, in which case callers keep NeutralEvent.</summary>
+        public static LetterDef NarrativeLetter
+        {
+            get
+            {
+                if (!narrativeLetterResolved)
+                {
+                    narrativeLetterResolved = true;
+                    narrativeLetter = DefDatabase<LetterDef>.GetNamedSilentFail("ClaudeStoryteller_Narrative");
+                }
+                return narrativeLetter;
+            }
+        }
+
         // Set (and cleared in a finally) around Find.LetterStack.ReceiveLetter calls the mod
         // makes itself (SendNarrativeLetter). Letters we send ourselves are already the flavor
         // text — they must never additionally absorb a DIFFERENT staged flavor entry meant for
@@ -186,6 +205,12 @@ namespace ClaudeStoryteller
                 string body = existing.RawText ?? "";
                 string mergedBody = body.TrimEnd() + Environment.NewLine + Environment.NewLine + entry.Flavor;
                 textField.SetValue(__0, (TaggedString)mergedBody);
+
+                // Grey (NeutralEvent) letters carrying Claude's narration get the mod's
+                // color instead. Only grey: threat/negative defs keep their vanilla
+                // colors and sounds — danger signaling must survive the recolor.
+                if (__0.def == LetterDefOf.NeutralEvent && NarrativeLetter != null)
+                    __0.def = NarrativeLetter;
 
                 ClaudeLogger.LogEntry("LETTER_MERGED",
                     $"Flavor merged into letter '{__0.Label}': {entry.Flavor}");

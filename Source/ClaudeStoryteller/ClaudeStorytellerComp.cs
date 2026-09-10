@@ -1168,7 +1168,12 @@ namespace ClaudeStoryteller
                 LetterFlavorPatch.SelfSendActive = true;
                 try
                 {
-                    Find.LetterStack.ReceiveLetter(label, body, def ?? LetterDefOf.NeutralEvent);
+                    LetterDef resolved = def ?? LetterDefOf.NeutralEvent;
+                    // Mod-sent narration (arc openers, letter-only beats, closing letters)
+                    // gets the same violet as merged letters; threat defs pass through.
+                    if (resolved == LetterDefOf.NeutralEvent)
+                        resolved = LetterFlavorPatch.NarrativeLetter ?? resolved;
+                    Find.LetterStack.ReceiveLetter(label, body, resolved);
                 }
                 finally
                 {
