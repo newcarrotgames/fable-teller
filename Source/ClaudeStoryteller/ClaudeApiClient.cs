@@ -248,6 +248,10 @@ Whatever the source, echo the defName back exactly as given. Never return a labe
 
 RAID SUBTYPES (if RaidEnemy available) — subtype picks the raid STRATEGY, how they fight: ""assault"", ""sapper"", ""siege"", ""breach"", ""drop_pods"" (a legacy alias for an immediate-attack strategy that also defaults arrival to a center drop unless arrival_mode says otherwise).
 ARRIVAL MODE — arrival_mode picks HOW THEY ARRIVE, independent of subtype: ""walk_in"", ""walk_in_groups"", ""drop_edge"", ""drop_center"", ""drop_scatter"", or null to let the game decide. Raids only. Some strategies restrict arrival: siege allows only walk_in/drop_edge; sapper allows only walk_in/walk_in_groups/drop_edge; breach allows only walk_in. An incompatible pairing is skipped in code (logged, not an error) and the raid still fires with the strategy's own default arrival.
+PAWN KINDS — pawn_kind and pawn_count choose WHO shows up. Exactly two event types honor them; everything else ignores them silently, so do not set them elsewhere:
+- ManhunterPack (and mod variants of it): pawn_kind picks the animal from animal_kinds, pawn_count the pack size. Either alone works. A swarm of something small and absurd is as legitimate as one apex predator — match it to the tone you want.
+- RaidEnemy: pawn_kind plus pawn_count >= 1 (both required together) builds the raid from exactly that many of one kind from raid_pawn_kinds — every raider identical, e.g. eight grenadiers, or twenty club-swinging tribals. Mechanoid kinds require faction ""Mechanoid"". Omit both for a normal mixed raid.
+animal_kinds and raid_pawn_kinds map defNames to combat power; count x power is checked against the colony's threat budget and the code clamps what exceeds it. Echo defNames exactly. Null both when you have no opinion.
 FACTIONS: available_factions lists every known faction's real name — hostile and friendly — plus the literal ""Mechanoid"" when a hostile mechanoid faction exists (its real faction is hidden). faction_details maps each name to relation/goodwill/kind, e.g. ""hostile, goodwill -100, tribal"" or ""ally, goodwill 85, outlander"". Only a HOSTILE faction can be a raid's attacker — naming a friendly or neutral faction there is silently ignored and the raid fires without that override. Friendly and neutral factions are still useful: name them in flavor, pin an arc to one for a grudge or alliance story, frame a quest around one. Rotate factions. An arc may pin a faction with arc.arc_faction (an exact name from available_factions); later beats can reuse it via faction: ""same_as_opening"".
 
 ==============================
@@ -318,6 +322,8 @@ Respond ONLY with valid JSON:
         ""type"": ""<exact defName from available_events>"" or ""none"" (letter-only beat, at most one per arc),
         ""subtype"": ""<or null>"",
         ""arrival_mode"": ""walk_in"" or ""walk_in_groups"" or ""drop_edge"" or ""drop_center"" or ""drop_scatter"" or null (raids only),
+        ""pawn_kind"": ""<defName from animal_kinds or raid_pawn_kinds>"" or null (manhunter packs and raids only),
+        ""pawn_count"": <number or null — exact pack/raid size; required with pawn_kind on raids>,
         ""faction"": ""<exact name from available_factions>"" or ""same_as_opening"" or null,
         ""intensity"": <float — use your judgment>,
         ""circle_step"": ""need"" or ""search"" or ""find"" or ""take"" or ""return"" or ""change"",
@@ -340,6 +346,8 @@ Respond ONLY with valid JSON:
       ""type"": ""<exact defName from available_events>"" or ""none"" (letter-only vignette, at most one per call),
       ""subtype"": ""<or null>"",
       ""arrival_mode"": ""walk_in"" or ""walk_in_groups"" or ""drop_edge"" or ""drop_center"" or ""drop_scatter"" or null (raids only),
+      ""pawn_kind"": ""<defName from animal_kinds or raid_pawn_kinds>"" or null (manhunter packs and raids only),
+      ""pawn_count"": <number or null — exact pack/raid size; required with pawn_kind on raids>,
       ""faction"": ""<or null>"",
       ""intensity"": <float>,
       ""note"": ""<DEBUG LOG ONLY: why this event at this time>"",
@@ -558,6 +566,17 @@ Respond ONLY with valid JSON:
         private static Dictionary<string, object> SchemaNumber() =>
             new Dictionary<string, object> { { "type", "number" } };
 
+        private static Dictionary<string, object> SchemaNumberNullable() =>
+            new Dictionary<string, object>
+            {
+                { "anyOf", new List<object>
+                    {
+                        new Dictionary<string, object> { { "type", "number" } },
+                        new Dictionary<string, object> { { "type", "null" } }
+                    }
+                }
+            };
+
         private static Dictionary<string, object> SchemaArray(object items) =>
             new Dictionary<string, object> { { "type", "array" }, { "items", items } };
 
@@ -591,6 +610,8 @@ Respond ONLY with valid JSON:
                 { "type", SchemaString(false) },
                 { "subtype", SchemaString(true) },
                 { "arrival_mode", SchemaString(true) },
+                { "pawn_kind", SchemaString(true) },
+                { "pawn_count", SchemaNumberNullable() },
                 { "faction", SchemaString(true) },
                 { "intensity", SchemaNumber() },
                 { "circle_step", SchemaString(false) },
@@ -627,6 +648,8 @@ Respond ONLY with valid JSON:
                 { "type", SchemaString(false) },
                 { "subtype", SchemaString(true) },
                 { "arrival_mode", SchemaString(true) },
+                { "pawn_kind", SchemaString(true) },
+                { "pawn_count", SchemaNumberNullable() },
                 { "faction", SchemaString(true) },
                 { "intensity", SchemaNumber() },
                 { "note", SchemaString(true) },
@@ -820,6 +843,8 @@ Respond ONLY with valid JSON:
                     Type = ExtractStringValue(eventJson, "type"),
                     Subtype = ExtractStringValue(eventJson, "subtype"),
                     ArrivalMode = ExtractStringValue(eventJson, "arrival_mode"),
+                    PawnKind = ExtractStringValue(eventJson, "pawn_kind"),
+                    PawnCount = (int)ExtractFloatValue(eventJson, "pawn_count", 0),
                     Faction = ExtractStringValue(eventJson, "faction"),
                     Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                     Animal = ExtractStringValue(eventJson, "animal"),
@@ -942,6 +967,8 @@ Respond ONLY with valid JSON:
                     Type = ExtractStringValue(eventJson, "type"),
                     Subtype = ExtractStringValue(eventJson, "subtype"),
                     ArrivalMode = ExtractStringValue(eventJson, "arrival_mode"),
+                    PawnKind = ExtractStringValue(eventJson, "pawn_kind"),
+                    PawnCount = (int)ExtractFloatValue(eventJson, "pawn_count", 0),
                     Faction = ExtractStringValue(eventJson, "faction"),
                     Intensity = ExtractFloatValue(eventJson, "intensity", 1.0f),
                     Animal = ExtractStringValue(eventJson, "animal"),

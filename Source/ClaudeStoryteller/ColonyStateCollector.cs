@@ -767,6 +767,8 @@ namespace ClaudeStoryteller
 
             var availableEvents = GetAvailableEventsByCategory(map);
             var availableQuests = GetAvailableQuests(map);
+            var animalKinds = GetAnimalKinds();
+            var raidPawnKinds = GetRaidPawnKinds();
 
             // Per-call count, so the offered list is checkable without opening STATE_SENT.
             int realPool = AllKnownEvents.Count(e => DefDatabase<IncidentDef>.GetNamedSilentFail(e) != null);
@@ -781,6 +783,7 @@ namespace ClaudeStoryteller
                 (availableQuests.Count > 0
                     ? " [" + string.Join(", ", availableQuests.Keys.OrderBy(k => k, StringComparer.Ordinal)) + "]"
                     : "") +
+                "; " + animalKinds.Count + " animal kind(s), " + raidPawnKinds.Count + " raid pawn kind(s)" +
                 (CanFireDisease() ? "" : " (disease bucket cleared: cooldown)") + ".");
 
             var state = new ColonyState
@@ -813,7 +816,9 @@ namespace ClaudeStoryteller
                 ColonistNames = colonists.OrderBy(p => p.thingIDNumber)
                     .Select(p => p.Name?.ToStringShort ?? p.LabelShortCap).ToList(),
                 CastChangesSinceLastCall = comp?.GetCastChangesSinceLastCall(),
-                AvailableQuests = availableQuests
+                AvailableQuests = availableQuests,
+                AnimalKinds = animalKinds,
+                RaidPawnKinds = raidPawnKinds
             };
 
             // One call = one increment, so calls_since_beat_authored actually counts calls.
@@ -1243,6 +1248,41 @@ namespace ClaudeStoryteller
             }
 
             return quests;
+        }
+
+        // ========== Pawn kinds (for pawn_kind/pawn_count on manhunter packs and raids) ==========
+
+        /// <summary>defName -> "power N" for every animal that can arrive as a manhunter.
+        /// Mirrors vanilla's private AggressiveAnimalIncidentUtility.CanArriveManhunter filter
+        /// (Animal && canArriveManhunter && CanPassFences).</summary>
+        public static Dictionary<string, string> GetAnimalKinds()
+        {
+            var kinds = new Dictionary<string, string>();
+            foreach (var k in DefDatabase<PawnKindDef>.AllDefsListForReading
+                .Where(k => k?.RaceProps != null && k.RaceProps.Animal
+                    && k.canArriveManhunter && k.RaceProps.CanPassFences && k.combatPower > 0f)
+                .OrderBy(k => k.defName, StringComparer.Ordinal))
+            {
+                kinds[k.defName] = "power " + k.combatPower.ToString("F0");
+            }
+            return kinds;
+        }
+
+        /// <summary>defName -> "power N" for kinds a uniform raid can be built from: humanlike
+        /// fighters plus mechanoid fighters (the prompt notes mechs require the Mechanoid
+        /// faction). RaidStrategyWorker.SpawnThreats generates whatever kind it is given, so
+        /// this list is guidance for Claude, not a code-side gate.</summary>
+        public static Dictionary<string, string> GetRaidPawnKinds()
+        {
+            var kinds = new Dictionary<string, string>();
+            foreach (var k in DefDatabase<PawnKindDef>.AllDefsListForReading
+                .Where(k => k?.RaceProps != null && k.isFighter && k.combatPower > 0f
+                    && (k.RaceProps.Humanlike || k.RaceProps.IsMechanoid))
+                .OrderBy(k => k.defName, StringComparer.Ordinal))
+            {
+                kinds[k.defName] = "power " + k.combatPower.ToString("F0");
+            }
+            return kinds;
         }
     }
 }

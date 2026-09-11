@@ -45,6 +45,12 @@ namespace ClaudeStoryteller.Models
         // (game decides). Raids only; read from this event's own JSON sub-block, never the
         // whole document — same rule as fire_when.
         public string ArrivalMode { get; set; }
+
+        // Only two workers honor these (verified against the decompiled 1.6 assembly):
+        // manhunter packs (kind and/or count) and raids (kind requires count >= 1).
+        // Read from this event's own JSON sub-block only.
+        public string PawnKind { get; set; }
+        public int PawnCount { get; set; }
     }
 
     public class EventDecision
@@ -126,6 +132,12 @@ namespace ClaudeStoryteller.Models
         // "walk_in" | "walk_in_groups" | "drop_edge" | "drop_center" | "drop_scatter" | null
         // (game decides). Raids only; read from this beat's own eventJson sub-block only.
         public string ArrivalMode { get; set; }
+
+        // Only two workers honor these (verified against the decompiled 1.6 assembly):
+        // manhunter packs (kind and/or count) and raids (kind requires count >= 1).
+        // Read from this beat's own eventJson sub-block only.
+        public string PawnKind { get; set; }
+        public int PawnCount { get; set; }
 
         // Raw braced JSON of the optional "on_bad" sub-object (type/subtype/faction/intensity/flavor),
         // kept unparsed here and only decoded via ClaudeApiClient's static extractors at fire time —

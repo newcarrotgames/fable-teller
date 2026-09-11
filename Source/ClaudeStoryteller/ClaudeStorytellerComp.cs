@@ -453,6 +453,10 @@ namespace ClaudeStoryteller
                             queued.Subtype = ClaudeApiClient.ExtractOnBadString(queued.OnBadJson, "subtype") ?? queued.Subtype;
                             queued.Faction = ClaudeApiClient.ExtractOnBadString(queued.OnBadJson, "faction") ?? queued.Faction;
                             queued.Intensity = ClaudeApiClient.ExtractOnBadFloat(queued.OnBadJson, "intensity", queued.Intensity);
+                            // on_bad has no pawn fields; the originals were chosen for the
+                            // PLANNED type and would silently misdirect the substitute.
+                            queued.PawnKindName = null;
+                            queued.PawnCount = 0;
                             string badFlavor = ClaudeApiClient.ExtractOnBadString(queued.OnBadJson, "flavor");
                             if (!string.IsNullOrEmpty(badFlavor)) queued.Flavor = badFlavor;
                         }
@@ -700,6 +704,8 @@ namespace ClaudeStoryteller
                             EventType = scattered.Type,
                             Subtype = scattered.Subtype,
                             ArrivalMode = scattered.ArrivalMode,
+                            PawnKindName = scattered.PawnKind,
+                            PawnCount = scattered.PawnCount,
                             Faction = scattered.Faction,
                             Intensity = scattered.Intensity,
                             SourceCycle = "scattered",
@@ -720,6 +726,8 @@ namespace ClaudeStoryteller
                             EventType = scattered.Type,
                             Subtype = scattered.Subtype,
                             ArrivalMode = scattered.ArrivalMode,
+                            PawnKindName = scattered.PawnKind,
+                            PawnCount = scattered.PawnCount,
                             Faction = scattered.Faction,
                             Intensity = scattered.Intensity,
                             SourceCycle = "scattered",
@@ -980,6 +988,8 @@ namespace ClaudeStoryteller
                     EventType = arcEvent.Type,
                     Subtype = arcEvent.Subtype,
                     ArrivalMode = arcEvent.ArrivalMode,
+                    PawnKindName = arcEvent.PawnKind,
+                    PawnCount = arcEvent.PawnCount,
                     Faction = arcEvent.Faction,
                     Intensity = arcEvent.Intensity,
                     SourceCycle = "narrative",
@@ -1264,6 +1274,8 @@ namespace ClaudeStoryteller
                 queued.Faction,
                 queued.Subtype,
                 queued.ArrivalMode,
+                queued.PawnKindName,
+                queued.PawnCount,
                 target,
                 queued.SourceCycle,
                 out resolvedType
@@ -1306,10 +1318,10 @@ namespace ClaudeStoryteller
             return incident;
         }
 
-        private FiringIncident ConvertToIncidentWithFallback(string type, float intensity, string faction, string subtype, string arrivalMode, IIncidentTarget target, string source, out string resolvedType)
+        private FiringIncident ConvertToIncidentWithFallback(string type, float intensity, string faction, string subtype, string arrivalMode, string pawnKind, int pawnCount, IIncidentTarget target, string source, out string resolvedType)
         {
             // Try the requested event first
-            var incident = TryConvertToIncident(type, intensity, faction, subtype, arrivalMode, target);
+            var incident = TryConvertToIncident(type, intensity, faction, subtype, arrivalMode, pawnKind, pawnCount, target);
             if (incident != null)
             {
                 resolvedType = ResolveEventName(type);
@@ -1349,7 +1361,7 @@ namespace ClaudeStoryteller
 
             foreach (var fallbackType in shuffled)
             {
-                incident = TryConvertToIncident(fallbackType, 1.0f, null, null, null, target);
+                incident = TryConvertToIncident(fallbackType, 1.0f, null, null, null, null, 0, target);
                 if (incident != null)
                 {
                     resolvedType = fallbackType;
@@ -1364,7 +1376,7 @@ namespace ClaudeStoryteller
             return null;
         }
 
-        private FiringIncident TryConvertToIncident(string type, float intensity, string faction, string subtype, string arrivalMode, IIncidentTarget target)
+        private FiringIncident TryConvertToIncident(string type, float intensity, string faction, string subtype, string arrivalMode, string pawnKind, int pawnCount, IIncidentTarget target)
         {
             var diff = GetDifficulty();
             string resolvedType = ResolveEventName(type);
@@ -1485,6 +1497,99 @@ namespace ClaudeStoryteller
                     {
                         parms.raidArrivalMode = mode;
                     }
+                }
+            }
+
+            // pawn_kind / pawn_count: exactly two vanilla workers read these parms (verified
+            // against this install's decompiled 1.6 assembly) — setting them anywhere else is a
+            // silent no-op, so gate on the worker type, not the defName, which also covers mod
+            // defs that reuse or subclass the vanilla workers.
+            if (!string.IsNullOrEmpty(pawnKind) || pawnCount > 0)
+            {
+                bool isAnimalPack = incidentDef.workerClass != null
+                    && typeof(IncidentWorker_AggressiveAnimals).IsAssignableFrom(incidentDef.workerClass);
+                bool isRaid = incidentDef.workerClass != null
+                    && typeof(IncidentWorker_RaidEnemy).IsAssignableFrom(incidentDef.workerClass);
+
+                PawnKindDef kindDef = string.IsNullOrEmpty(pawnKind)
+                    ? null
+                    : DefDatabase<PawnKindDef>.GetNamedSilentFail(pawnKind);
+                if (!string.IsNullOrEmpty(pawnKind) && kindDef == null)
+                {
+                    ClaudeLogger.LogEntry("PAWN_KIND_UNKNOWN",
+                        $"pawn_kind '{pawnKind}' is not a PawnKindDef; ignoring for {type}.");
+                }
+
+                if (isAnimalPack)
+                {
+                    // Mirrors vanilla's private AggressiveAnimalIncidentUtility.CanArriveManhunter.
+                    if (kindDef != null && !(kindDef.RaceProps.Animal && kindDef.canArriveManhunter
+                        && kindDef.RaceProps.CanPassFences))
+                    {
+                        ClaudeLogger.LogEntry("PAWN_KIND_INCOMPATIBLE",
+                            $"pawn_kind '{pawnKind}' cannot arrive as a manhunter; letting vanilla pick for {type}.");
+                        kindDef = null;
+                    }
+                    if (kindDef != null) parms.pawnKind = kindDef;
+                    if (pawnCount > 0)
+                    {
+                        // An explicit count bypasses the points formula entirely, so keep it
+                        // sane: budget slack of 2.5x with a floor of 10 (swarms of small things
+                        // are legitimate), under vanilla's own hard cap of 100.
+                        float power = parms.pawnKind?.combatPower ?? 0f;
+                        int maxByPoints = power > 0f ? Math.Max(10, (int)(parms.points * 2.5f / power)) : 100;
+                        int clamped = Math.Min(Math.Min(pawnCount, maxByPoints), 100);
+                        if (clamped != pawnCount)
+                            ClaudeLogger.LogEntry("PAWN_COUNT_CLAMPED",
+                                $"pawn_count {pawnCount} -> {clamped} for {type} ({parms.points:F0} points).");
+                        parms.pawnCount = clamped;
+                    }
+                    if (parms.pawnKind != null || parms.pawnCount > 0)
+                        ClaudeLogger.LogEntry("PAWN_KIND",
+                            $"{type}: kind={parms.pawnKind?.defName ?? "(vanilla picks)"}, " +
+                            $"count={(parms.pawnCount > 0 ? parms.pawnCount.ToString() : "(auto)")}");
+                }
+                else if (isRaid)
+                {
+                    // RaidStrategyWorker.SpawnThreats builds exactly pawnCount pawns of pawnKind
+                    // when the kind is set — and an EMPTY (not null) list when the count is 0,
+                    // which fires a raid with no pawns at all. Kind never goes on without a
+                    // count >= 1. Mechs can only generate for the mechanoid faction.
+                    if (kindDef != null && kindDef.RaceProps.IsMechanoid
+                        && parms.faction != Faction.OfMechanoids)
+                    {
+                        ClaudeLogger.LogEntry("PAWN_KIND_INCOMPATIBLE",
+                            $"pawn_kind '{pawnKind}' is mechanoid but the raid faction is " +
+                            $"{parms.faction?.Name ?? "(unset)"}; ignoring for {type}.");
+                        kindDef = null;
+                    }
+                    if (kindDef != null)
+                    {
+                        float power = Math.Max(1f, kindDef.combatPower);
+                        int count = pawnCount > 0 ? pawnCount : Math.Max(1, (int)(parms.points / power));
+                        // Tighter slack than animal packs — uniform raids kill colonies.
+                        int maxByPoints = Math.Max(2, (int)(parms.points * 1.5f / power));
+                        int clamped = Math.Max(1, Math.Min(Math.Min(count, maxByPoints), 50));
+                        if (clamped != count)
+                            ClaudeLogger.LogEntry("PAWN_COUNT_CLAMPED",
+                                $"pawn_count {count} -> {clamped} for {type} ({parms.points:F0} points, " +
+                                $"{kindDef.defName} power {kindDef.combatPower:F0}).");
+                        parms.pawnKind = kindDef;
+                        parms.pawnCount = clamped;
+                        ClaudeLogger.LogEntry("PAWN_KIND",
+                            $"{type}: raid of {parms.pawnCount} x {kindDef.defName}");
+                    }
+                    else if (pawnCount > 0 && string.IsNullOrEmpty(pawnKind))
+                    {
+                        ClaudeLogger.LogEntry("PAWN_KIND_INCOMPATIBLE",
+                            $"pawn_count without pawn_kind does nothing on a raid; ignoring for {type}.");
+                    }
+                }
+                else
+                {
+                    ClaudeLogger.LogEntry("PAWN_KIND_INCOMPATIBLE",
+                        $"{type} does not honor pawn_kind/pawn_count (worker " +
+                        $"{incidentDef.workerClass?.Name ?? "null"}); ignoring.");
                 }
             }
 

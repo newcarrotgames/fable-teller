@@ -41,6 +41,11 @@ namespace ClaudeStoryteller.Models
         // defName -> short mechanical gloss, for every root-selectable QuestScriptDef that
         // CanRun right now. Use one as a beat/scattered event's "type" like an incident defName.
         public Dictionary<string, string> AvailableQuests { get; set; }
+
+        // defName -> "power N". animal_kinds: kinds valid for pawn_kind on manhunter packs;
+        // raid_pawn_kinds: kinds valid for pawn_kind on raids (humanlike + mechanoid fighters).
+        public Dictionary<string, string> AnimalKinds { get; set; }
+        public Dictionary<string, string> RaidPawnKinds { get; set; }
     }
     public class ColonyInfo
     {
