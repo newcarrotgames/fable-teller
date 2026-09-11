@@ -471,11 +471,17 @@ namespace ClaudeStoryteller
                 if (string.Equals(queued.EventType, "none", StringComparison.OrdinalIgnoreCase))
                 {
                     var noneComp = StorytellerGameComponent.Get();
-                    if (!string.IsNullOrEmpty(queued.Flavor)) noneComp?.RecordArcLetter(queued.Flavor);
+                    // Scattered vignettes share this path but are texture, not beats —
+                    // they must never write into the arc's transcript or beat record.
+                    bool isArcBeat = !string.Equals(queued.SourceCycle, "scattered", StringComparison.OrdinalIgnoreCase);
+                    if (isArcBeat && !string.IsNullOrEmpty(queued.Flavor)) noneComp?.RecordArcLetter(queued.Flavor);
                     // Queued, not sent — delivered at the top of the NEXT pass, so it cannot
                     // clobber flavor staged for another beat firing later in THIS pass.
-                    noneComp?.QueuePendingLetter(queued.ArcName ?? "The story continues", queued.Flavor, false, false);
-                    noneComp?.RecordLetterOnlyBeat(queued.CircleStep, queued.Link, queued.LinkReason, queued.Expect, queued.Faction, map);
+                    noneComp?.QueuePendingLetter(
+                        isArcBeat ? (queued.ArcName ?? "The story continues") : "Around the colony",
+                        queued.Flavor, false, false);
+                    if (isArcBeat)
+                        noneComp?.RecordLetterOnlyBeat(queued.CircleStep, queued.Link, queued.LinkReason, queued.Expect, queued.Faction, map);
                     continue;
                 }
 
@@ -661,6 +667,23 @@ namespace ClaudeStoryteller
                 foreach (var scattered in scatteredList)
                 {
                     if (string.IsNullOrEmpty(scattered.Type)) continue;
+
+                    // type "none": a letter-only vignette, no incident behind it. Always rides
+                    // EventQueue — even at delay 0 — so slot tokens and the tell check run in
+                    // the drain loop like every other letter; "next pass" is prompt enough for
+                    // pure texture. One with no flavor is nothing at all: drop it.
+                    if (string.Equals(scattered.Type, "none", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (string.IsNullOrEmpty(scattered.Flavor)) continue;
+                        EventQueue.EnqueueDelayed(new QueuedEvent
+                        {
+                            EventType = "none",
+                            SourceCycle = "scattered",
+                            Note = scattered.Note,
+                            Flavor = scattered.Flavor
+                        }, Math.Max(scattered.DelayHours, 0f));
+                        continue;
+                    }
 
                     // Disease safety net
                     string resolvedType = ResolveEventName(scattered.Type);

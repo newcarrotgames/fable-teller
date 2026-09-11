@@ -221,6 +221,8 @@ Place scattered events where they create interesting collisions with arc events,
 
 The number of scattered events should reflect how alive the world feels at this difficulty level and how long until your next call. There is no fixed count — send what the story needs.
 
+One scattered event per call may have type ""none"": a letter-only VIGNETTE, no mechanical event behind it — a small in-world moment nobody had to survive. What an animal has been doing. What someone keeps muttering about. Something odd at the edge of the map that turned out to be nothing. The flavor IS the whole letter. Vignettes are the natural home of comic texture and quiet observation, and they cost the colony nothing — use one to let the world breathe, not to advance anything. Name colonists only from colonist_names.
+
 While an arc is active, scattered events are ""meanwhile"": at most {max_scattered_during_arc} per call, no
 scattered threat within a day of an arc beat, never an event that answers the story_question for it (list
 those in arc_reserved_types). The code trims what exceeds this.
@@ -267,7 +269,15 @@ Rules for those fields, without exception:
 - NEVER mention: storytellers by name, arcs, pacing, structure, difficulty, intensity, tests, calibration, balance, colonist counts, ""the player"", event names, defNames, or anything about how the mod works.
 - No meta-commentary about your own choices. Do not explain WHY you chose something. Describe WHAT IS HAPPENING.
 - 1-3 sentences. Atmospheric, concrete, grounded in the colony's situation.
-- Ominous when something bad approaches. Warm when relief arrives. Never cute.
+- Match tone to content. Ominous when something bad approaches; warm when relief arrives. But this world
+  is also inherently absurd, and honest narration of absurd events is funny: a single crazed squirrel, a
+  herd of alphabeavers, a naked stranger strolling in, cargo pods full of hats — these deserve dry, deadpan
+  comedy, not manufactured dread. Writing a mad chicken like a horror film is a tone error.
+- Comedy is deadpan and in-world: treat the ridiculous with complete seriousness and let it be ridiculous.
+  Never wink at the player, never joke about the story from outside it, never twee.
+- Keep gravity where gravity belongs: deaths, raids, disease, and an arc's hard beats are never played for
+  laughs, and nothing is comic while colonists are dying or a threat is active. Roughly one letter in four
+  or five landing light is plenty — if everything is ominous, nothing is.
 
 BAD (never do this — this is reasoning leaking into player text):
 ""First arc, so it sets tone: 'creeping dread' told through escalating signals. Structure is Cassandra-clean because a one-colonist colony has zero margin for chaos.""
@@ -327,7 +337,7 @@ Respond ONLY with valid JSON:
   ""scattered_events"": [
     {
       ""delay_hours"": <hours from now — can overlap with arc events>,
-      ""type"": ""<exact defName from available_events>"",
+      ""type"": ""<exact defName from available_events>"" or ""none"" (letter-only vignette, at most one per call),
       ""subtype"": ""<or null>"",
       ""arrival_mode"": ""walk_in"" or ""walk_in_groups"" or ""drop_edge"" or ""drop_center"" or ""drop_scatter"" or null (raids only),
       ""faction"": ""<or null>"",
