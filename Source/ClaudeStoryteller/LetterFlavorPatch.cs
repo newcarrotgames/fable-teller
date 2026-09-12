@@ -70,6 +70,14 @@ namespace ClaudeStoryteller
         // some other letter.
         public static bool SelfSendActive;
 
+        // Depth-counted flag for "Storyteller.TryFire is currently executing a Claude-sourced
+        // incident". StageFlavor is called optimistically, before our FiringIncident is handed
+        // back to vanilla to actually fire — so without this gate, ANY letter that lands within
+        // FLAVOR_WINDOW_TICKS (a vanilla BaseStoryteller incident, another mod's incident, an
+        // "uninvited" incident per PawnEventPatch) would absorb flavor written about a totally
+        // different pawn/event. Depth-counted rather than bool in case TryFire ever reenters.
+        private static int expectingOwnLetterDepth;
+
         static LetterFlavorPatch()
         {
             try
@@ -95,6 +103,31 @@ namespace ClaudeStoryteller
                     typeof(LetterFlavorPatch).GetMethod(nameof(Prefix),
                         BindingFlags.NonPublic | BindingFlags.Static)));
 
+                // Resolved by name/shape, same pattern as PawnEventPatch's TryFire lookup —
+                // TryFire is the one place vanilla actually executes a FiringIncident (and,
+                // synchronously in nearly every case, sends its letter), so wrapping it tells
+                // us whose letter is about to be raised.
+                MethodInfo tryFireTarget = typeof(Storyteller)
+                    .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                    .FirstOrDefault(m => m.Name == "TryFire"
+                        && m.GetParameters().Length >= 1
+                        && typeof(FiringIncident).IsAssignableFrom(m.GetParameters()[0].ParameterType)
+                        && m.ReturnType == typeof(bool));
+
+                if (tryFireTarget != null)
+                {
+                    harmony.Patch(tryFireTarget,
+                        prefix: new HarmonyMethod(typeof(LetterFlavorPatch).GetMethod(
+                            nameof(TryFirePrefix), BindingFlags.NonPublic | BindingFlags.Static)),
+                        finalizer: new HarmonyMethod(typeof(LetterFlavorPatch).GetMethod(
+                            nameof(TryFireFinalizer), BindingFlags.NonPublic | BindingFlags.Static)));
+                }
+                else
+                {
+                    Log.Warning("[ClaudeStoryteller] Storyteller.TryFire not found; letter merge "
+                              + "will not verify the letter belongs to our own incident.");
+                }
+
                 PatchActive = true;
                 Log.Message($"[ClaudeStoryteller] Letter merge patch applied to {target.Name}"
                           + $"({target.GetParameters()[0].ParameterType.Name}).");
@@ -105,6 +138,16 @@ namespace ClaudeStoryteller
                 Log.Warning($"[ClaudeStoryteller] Letter merge patch failed: {ex.Message}. "
                           + "Flavor will be sent as separate letters.");
             }
+        }
+
+        private static void TryFirePrefix(FiringIncident __0)
+        {
+            if (__0?.source is StorytellerComp_Claude) expectingOwnLetterDepth++;
+        }
+
+        private static void TryFireFinalizer(FiringIncident __0)
+        {
+            if (__0?.source is StorytellerComp_Claude) expectingOwnLetterDepth--;
         }
 
         /// <summary>Stash flavor for the next letter the game raises. isArc: true for narrative
@@ -170,6 +213,12 @@ namespace ClaudeStoryteller
             // Letters the mod sends itself (SendNarrativeLetter) are already the flavor text —
             // never let them additionally swallow a DIFFERENT entry meant for some other letter.
             if (SelfSendActive) return;
+            // Not inside our own incident's TryFire: this letter belongs to someone else
+            // (vanilla BaseStoryteller, another mod, an "uninvited" incident) and must not
+            // absorb flavor written about a different pawn/event. Leave it queued — either our
+            // own incident's letter claims it shortly after, or it expires and goes out
+            // standalone via TakeExpiredFlavor.
+            if (expectingOwnLetterDepth <= 0) return;
 
             FlavorEntry entry;
             lock (pendingLock)
