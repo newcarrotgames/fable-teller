@@ -9,8 +9,96 @@ Configure your API key in Mod Settings > Claude Storyteller.</description>
     <portraitLarge>Storytellers/ClaudeLarge</portraitLarge>
     <portraitTiny>Storytellers/ClaudeTiny</portraitTiny>
     
-    <comps>
+    <!--
+      BaseStoryteller's own comps are NOT cleared by default XML inheritance — declaring one
+      <li> here used to just append to the inherited 19, so ~13 vanilla comps (deep drill
+      infestations, Gauranlen pod spawns, Anomaly monolith migration, wastepack infestation,
+      noxious haze, tribute collector, anima/polux tree spawns, beggars/epic/reliquary quest
+      comps) were firing on a fixed schedule completely invisible to Claude. Every one of
+      those incidents is still reachable — Claude's own runtime pool discovery already offers
+      them as ordinary events/quests — this just removes the parallel vanilla autofire so
+      Claude decides if/when, instead of duplicating it blind. Inherit="False" wipes the
+      inherited list; only the true progression gates (endgame quests, Royalty intro quests,
+      the mechanitor ancient-complex quest) are re-declared below, verbatim from
+      Core/Defs/Storyteller/Storytellers.xml, because nothing else ever offers those.
+    -->
+    <comps Inherit="False">
       <li Class="ClaudeStoryteller.StorytellerCompProperties_Claude" />
+
+      <!-- Endgame - ship escape quest -->
+      <li Class="StorytellerCompProperties_SingleOnceFixed">
+        <fireAfterDaysPassed>20</fireAfterDaysPassed>
+        <incident>GiveQuest_EndGame_ShipEscape</incident>
+        <allowedTargetTags>
+          <li>World</li>
+        </allowedTargetTags>
+      </li>
+      <!-- Endgame - archonexus victory quest -->
+      <li Class="StorytellerCompProperties_RefiringUniqueQuest">
+        <minColonyWealth>150000</minColonyWealth>
+        <minDaysPassed>0</minDaysPassed>
+        <incident MayRequire="Ludeon.RimWorld.Ideology">GiveQuest_EndGame_ArchonexusVictory</incident>
+        <allowedTargetTags>
+          <li>World</li>
+        </allowedTargetTags>
+        <enableIfAnyModActive>
+          <li>Ludeon.RimWorld.Ideology</li>
+        </enableIfAnyModActive>
+      </li>
+      <!-- Endgame - royal ascent quest (Royalty only) -->
+      <li Class="StorytellerCompProperties_RefiringUniqueQuest">
+        <minDaysPassed>35</minDaysPassed>
+        <refireEveryDays>22</refireEveryDays>
+        <incident MayRequire="Ludeon.RimWorld.Royalty">GiveQuest_EndGame_RoyalAscent</incident>
+        <allowedTargetTags>
+          <li>World</li>
+        </allowedTargetTags>
+        <enableIfAnyModActive>
+          <li>Ludeon.RimWorld.Royalty</li>
+        </enableIfAnyModActive>
+      </li>
+      <!-- Royalty intro quests -->
+      <li Class="StorytellerCompProperties_SingleOnceFixed">
+        <fireAfterDaysPassed>8</fireAfterDaysPassed>
+        <incident MayRequire="Ludeon.RimWorld.Royalty">GiveQuest_Intro_Wimp</incident>
+        <skipIfColonistHasMinTitle MayRequire="Ludeon.RimWorld.Royalty">Yeoman</skipIfColonistHasMinTitle>
+        <skipIfOnExtremeBiome>true</skipIfOnExtremeBiome>
+        <minColonistCount>3</minColonistCount>
+        <allowedTargetTags>
+          <li>World</li>
+        </allowedTargetTags>
+        <enableIfAnyModActive>
+          <li>Ludeon.RimWorld.Royalty</li>
+        </enableIfAnyModActive>
+      </li>
+      <li Class="StorytellerCompProperties_SingleOnceFixed">
+        <fireAfterDaysPassed>26</fireAfterDaysPassed>
+        <incident MayRequire="Ludeon.RimWorld.Royalty">GiveQuest_Intro_Deserter</incident>
+        <skipIfOnExtremeBiome>true</skipIfOnExtremeBiome>
+        <allowedTargetTags>
+          <li>World</li>
+        </allowedTargetTags>
+        <enableIfAnyModActive>
+          <li>Ludeon.RimWorld.Royalty</li>
+        </enableIfAnyModActive>
+      </li>
+      <!-- Mechanitor ancient complex -->
+      <li Class="StorytellerCompProperties_MechanitorComplexQuest" MayRequire="Ludeon.RimWorld.Biotech">
+        <incident MayRequire="Ludeon.RimWorld.Biotech">GiveQuest_AncientComplex_Mechanitor</incident>
+        <mtbDays>60</mtbDays>
+        <existingMechanitorOrMechlinkMTBFactor>4</existingMechanitorOrMechlinkMTBFactor>
+        <minSpacingDays>60</minSpacingDays>
+        <allowedTargetTags>
+          <li>Map_PlayerHome</li>
+        </allowedTargetTags>
+        <enableIfAnyModActive>
+          <li>Ludeon.RimWorld.Biotech</li>
+        </enableIfAnyModActive>
+        <blockedByQueuedOrActiveQuests>
+          <li>OpportunitySite_AncientComplex_Mechanitor</li>
+          <li>MechanitorShip</li>
+        </blockedByQueuedOrActiveQuests>
+      </li>
     </comps>
   </StorytellerDef>
 </Defs>
