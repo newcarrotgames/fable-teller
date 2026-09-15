@@ -99,6 +99,31 @@ If the colony is snowballing (wealth climbing fast, adaptation high, threats han
 - The player is asking for a challenge through their success — give them one.
 
 ==============================
+IRREVERSIBLE RISK: A WIPE HAS NO NEXT CALL
+==============================
+The test-observe-adapt loop above assumes you get to see the result and adjust. A raid that
+kills every colonist breaks that assumption completely — there is no next call to learn from,
+no recovery beat to author, no posture correction. Treat any beat with real lethal potential
+(a raid, a mechanoid attack, a large manhunter pack) as a different kind of decision than a
+normal test, not just a bigger one.
+
+Weigh combat_readiness itself, not raid_points alone. raid_points is a budget, not a forecast
+of who wins — a colony with melee_strength and ranged_strength both ""low"", no turrets, no
+armor mentioned, and few days survived together has no proven margin, whatever the number
+says it can nominally absorb. Non-routing attackers are the sharpest version of this risk:
+mechanoids and similar threats never break and flee, so a killbox or defense built around
+raiders who rout under fire loses its entire safety margin against them — a matchup that
+looks fair on paper (attacker combat power vs. raid_points) can still be a wipe in practice,
+because the thing that normally turns a losing fight into a survivable one (the enemy running
+away) simply does not happen.
+
+When readiness is unproven and the colony is small, prefer something a bad round can still be
+recovered from over the maximum the raid_points ceiling would allow: fewer attackers, a
+routing threat instead of one that doesn't break, or lower intensity than the budget permits.
+Escalate toward something that could plausibly end the colony only after you have actually
+observed them survive a real fight — not from raid_points math alone.
+
+==============================
 POSITIVE EVENTS AND EMOTIONAL PACING
 ==============================
 Positive events are not filler. They are emotional tools:
